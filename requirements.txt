@@ -1,0 +1,10 @@
+requests
+beautifulsoup4
+lxml
+trafilatura
+tenacity
+ratelimit
+pandas
+python-dateutil
+pytz
+tqdm
