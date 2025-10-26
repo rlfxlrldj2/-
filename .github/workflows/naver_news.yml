@@ -3,23 +3,42 @@ name: Naver News Daily 08:00 KST
 on:
   schedule:
     - cron: "0 23 * * *"   # KST 08:00 == UTC 23:00 (전날)
-  workflow_dispatch:        # 손으로 바로 실행 버튼
+  workflow_dispatch:        # 수동 실행 버튼
 
 permissions:
-  contents: write           # CSV를 레포에 커밋하려면 필요
+  contents: write           # CSV 커밋 권한
 
 jobs:
   crawl:
     runs-on: ubuntu-latest
     env:
-      TZ: Asia/Seoul        # 로그/파일 타임스탬프를 KST로
+      TZ: Asia/Seoul
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.ref }}        # 푸시 대상 브랜치 명확화
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+
+      - name: Verify required secrets exist (fast fail)
+        run: |
+          python - <<'PY'
+          import os, sys
+          miss=[k for k in ("NAVER_CLIENT_ID","NAVER_CLIENT_SECRET") if not os.getenv(k)]
+          if miss:
+              print("Missing secrets:", miss)
+              sys.exit(1)
+          print("All required secrets exist.")
+          PY
+        env:
+          NAVER_CLIENT_ID: ${{ secrets.NAVER_CLIENT_ID }}
+          NAVER_CLIENT_SECRET: ${{ secrets.NAVER_CLIENT_SECRET }}
 
       - name: Install deps
         run: pip install -r requirements.txt
@@ -35,27 +54,12 @@ jobs:
         with:
           name: naver_news_csv
           path: naver_news_*_07to07.csv
+          if-no-files-found: ignore     # CSV 없을 때도 실패하지 않게
 
       - name: Commit CSV to repo (히스토리 보관)
         run: |
-          git config user.name "github-actions[bot]"
+          git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add *.csv || true
           git commit -m "daily: update naver news CSV" || echo "No changes"
-          git push
-
-      # (선택) 이메일로 보내기 — Gmail 앱 비밀번호 필요
-      - name: Send email with CSV
-        if: ${{ secrets.MAIL_USERNAME != '' && secrets.MAIL_PASSWORD != '' && secrets.MAIL_TO != '' }}
-        uses: dawidd6/action-send-mail@v6
-        with:
-          server_address: smtp.gmail.com
-          server_port: 465
-          secure: true
-          username: ${{ secrets.MAIL_USERNAME }}   # 전체 Gmail 주소
-          password: ${{ secrets.MAIL_PASSWORD }}   # Gmail 앱 비밀번호
-          subject: "Naver News (07→07)"
-          to: ${{ secrets.MAIL_TO }}               # 콤마로 여러 명 가능
-          from: "Naver Robot <${{ secrets.MAIL_USERNAME }}>"
-          body: "자동 수집본입니다. 첨부 CSV를 확인하세요."
-          attachments: "naver_news_*_07to07.csv"
+          git push origin HEAD:${{ github.ref_name }}   # 푸시 대상 분기 명시
