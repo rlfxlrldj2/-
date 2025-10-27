@@ -30,7 +30,7 @@ KW_EXPANSIONS = {
 
 # 검색 규모(필요 시 조절)
 PER_BASE_LIMIT   = 2     # 각 기본 키워드당 확장어 몇 개까지 검색에 사용할지
-PER_QUERY_LIMIT  = 40   # 쿼리당 최대 기사 수
+PER_QUERY_LIMIT  = 40    # 쿼리당 최대 기사 수(속도용으로 40으로 설정)
 ONLY_NAVER_DOMAIN = True # 네이버 뉴스 도메인만 사용
 MIN_CHARS        = 200   # 본문 최소 길이(짧은 페이지 제외)
 TIMEZONE         = "Asia/Seoul"
@@ -125,7 +125,7 @@ def extract_article_text_from_html(html: str) -> str:
     candidates = ["#dic_area", "#newsct_article", "article"]
     for css in candidates:
         node = soup.select_one(css)
-        if not node: 
+        if not node:
             continue
         for junk in node.select("script, style, noscript, figure, table, aside, .byline, .copyright"):
             junk.decompose()
@@ -153,7 +153,7 @@ def extract_fulltext(url: str):
 # ===================== 키워드 매칭(요청 키워드/유사어) =====================
 
 def _make_kw_regex(w: str) -> str:
-    """공백/중간점 허용 정규식(치환문자 \s 문제 방지)"""
+    """공백/중간점 허용 정규식(치환문자 \\s 문제 방지)"""
     parts = []
     for ch in w:
         if ch.isspace():
@@ -176,7 +176,7 @@ def find_tags_for_article(title: str, snippet: str, text: str):
     """한 기사에서 매칭되는 모든 태그(키워드)를 반환"""
     full = f"{title}\n{snippet}\n{text}"
     hit_tags = []
-    for tag in BASE_KEYWORDS:  # 요청한 순서를 우선순위로 유지
+    for tag in BASE_KEYWORDS:  # 요청 순서 우선
         pats = TAG_PATTERNS[tag]
         if any(p.search(title) for p in pats) or any(p.search(full) for p in pats):
             hit_tags.append(tag)
@@ -270,7 +270,7 @@ def main_run():
     # 1) 기사 URL 수집
     items = collect_all_items(QUERIES, PER_QUERY_LIMIT)
 
-    rows, seen_final_url = [], set()
+    rows = []
 
     # 2) 본문 추출 + 시간 필터 + 태깅
     for it in tqdm(items, desc="본문 추출/정리"):
@@ -376,46 +376,44 @@ def main_run():
     out_csv = f"naver_news_{stamp}_07to07.csv"
     df_norm.to_csv(out_csv, index=False, encoding="utf-8-sig")
 
-   # 6) 엑셀 저장 — 키워드별 시트 (각 시트 내 URL 중복 제거)
-out_xlsx = f"naver_news_{stamp}_07to07.report.xlsx"
-cols_order = ["발주처 이름","프로젝트 이름","내용 요약(100자 이내)","담당자 연락처","규모","투자금액","공사지역","원본기사 URL 링크"]
+    # 6) 엑셀 저장 — 키워드별 시트 (각 시트 내 URL 중복 제거)
+    out_xlsx = f"naver_news_{stamp}_07to07.report.xlsx"
+    cols_order = ["발주처 이름","프로젝트 이름","내용 요약(100자 이내)","담당자 연락처","규모","투자금액","공사지역","원본기사 URL 링크"]
 
-# ---- NEW: Excel 친화적 시각 열 만들기 (tz 제거) ----
-df_norm_excel = df_norm.copy()
-if "pubDate_kst" in df_norm_excel.columns:
-    # 1) Series로 안전하게 datetime 변환 (tz-aware/naive 섞여 있어도 처리)
-    dt = pd.to_datetime(df_norm_excel["pubDate_kst"], errors="coerce", utc=True)
-    # 2) UTC -> KST로 변환 후 tz정보 제거(naive)
-    dt_kst_naive = dt.dt.tz_convert("Asia/Seoul").dt.tz_localize(None)
-    df_norm_excel["게재시각(KST)"] = dt_kst_naive
-else:
-    df_norm_excel["게재시각(KST)"] = ""
+    # ---- Excel 친화적 시각 열 만들기 (tz 제거) ----
+    df_norm_excel = df_norm.copy()
+    if "pubDate_kst" in df_norm_excel.columns:
+        dt = pd.to_datetime(df_norm_excel["pubDate_kst"], errors="coerce", utc=True)  # 혼합형 안전 변환
+        dt_kst_naive = dt.dt.tz_convert("Asia/Seoul").dt.tz_localize(None)            # tz 제거
+        df_norm_excel["게재시각(KST)"] = dt_kst_naive
+    else:
+        df_norm_excel["게재시각(KST)"] = ""
 
-with pd.ExcelWriter(out_xlsx) as writer:
-    # 전체 시트(원하는 열 + 게재시각)
-    all_df = df_norm_excel[cols_order + ["게재시각(KST)","title","matched_tags"]].copy()
-    all_df.to_excel(writer, index=False, sheet_name="전체")
+    with pd.ExcelWriter(out_xlsx) as writer:
+        # 전체 시트(요청 열 + 게재시각)
+        all_df = df_norm_excel[cols_order + ["게재시각(KST)"]].copy()
+        all_df.to_excel(writer, index=False, sheet_name="전체")
 
-    # 키워드별 시트
-    for tag in BASE_KEYWORDS:
-        mask = df_norm_excel["matched_tags"].apply(lambda lst: tag in lst if isinstance(lst, list) else False)
-        sub = df_norm_excel[mask].copy()
-        # 같은 키워드 시트 안에서 URL 중복 제거
-        sub = sub.drop_duplicates(subset=["원본기사 URL 링크"])
-        sub = sub[cols_order + ["게재시각(KST)"]]  # 게재시각 포함
-        sub.to_excel(writer, index=False, sheet_name=tag[:31])
+        # 키워드별 시트
+        for tag in BASE_KEYWORDS:
+            mask = df_norm_excel["matched_tags"].apply(lambda lst: tag in lst if isinstance(lst, list) else False)
+            sub = df_norm_excel[mask].copy()
+            # 같은 키워드 시트 안에서 URL 중복 제거
+            sub = sub.drop_duplicates(subset=["원본기사 URL 링크"])
+            sub = sub[cols_order + ["게재시각(KST)"]]
+            sub.to_excel(writer, index=False, sheet_name=tag[:31])
 
-print(f"[완료] 기사 {len(df_norm)}건 → CSV: {out_csv}, XLSX: {out_xlsx}")
-return out_csv, out_xlsx
+    print(f"[완료] 기사 {len(df_norm)}건 → CSV: {out_csv}, XLSX: {out_xlsx}")
+    return out_csv, out_xlsx
 
 if __name__ == "__main__":
     try:
-        csv, xlsx = main_run()
+        main_run()
     except Exception as e:
         print("[ERROR] Crawler failed:", repr(e))
         import traceback, pandas as pd
         traceback.print_exc()
-        # 실패해도 비어있는 산출물을 만들어 워크플로는 성공 처리
+        # 실패해도 비어있는 산출물을 만들어 두고(Artifacts/커밋용), 워크플로는 성공 처리
         from datetime import datetime
         stamp = datetime.now().strftime("%Y%m%d")
         empty_csv = f"naver_news_{stamp}_07to07.csv"
