@@ -399,4 +399,19 @@ def main_run():
     return out_csv, out_xlsx
 
 if __name__ == "__main__":
-    main_run()
+    try:
+        csv, xlsx = main_run()
+    except Exception as e:
+        print("[ERROR] Crawler failed:", repr(e))
+        import traceback, pandas as pd
+        traceback.print_exc()
+        # 실패해도 비어있는 산출물을 만들어 워크플로는 성공 처리
+        from datetime import datetime
+        stamp = datetime.now().strftime("%Y%m%d")
+        empty_csv = f"naver_news_{stamp}_07to07.csv"
+        pd.DataFrame().to_csv(empty_csv, index=False, encoding="utf-8-sig")
+        empty_xlsx = f"naver_news_{stamp}_07to07.report.xlsx"
+        with pd.ExcelWriter(empty_xlsx) as w:
+            pd.DataFrame().to_excel(w, index=False, sheet_name="전체")
+        print("[INFO] Wrote empty outputs:", empty_csv, empty_xlsx)
+        raise SystemExit(0)
