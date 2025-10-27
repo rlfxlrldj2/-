@@ -2,8 +2,8 @@ name: Naver News Daily 08:00 KST
 
 on:
   schedule:
-    - cron: "0 23 * * 6"   # 매주 일요일 08:00 KST
-  workflow_dispatch: {}     # 필요 시 수동 실행 계속 가능
+    - cron: "0 23 * * 0"   # 매주 일요일 23:00 UTC == 월요일 08:00 KST
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -68,3 +68,25 @@ jobs:
           git add *.csv *.xlsx || true
           git commit -m "daily: update naver news outputs" || echo "No changes"
           git push origin HEAD:${{ github.ref_name }}
+
+
+      - name: Send email with weekly report
+        if: ${{ secrets.MAIL_USERNAME != '' && secrets.MAIL_PASSWORD != '' && secrets.MAIL_TO != '' }}
+        uses: dawidd6/action-send-mail@v6
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          secure: true
+          username: ${{ secrets.MAIL_USERNAME }}     # 전체 Gmail 주소
+          password: ${{ secrets.MAIL_PASSWORD }}     # Gmail 앱 비밀번호(16자리)
+          subject: "Naver News 주간집계 (일→일)"
+          to: ${{ secrets.MAIL_TO }}                 # 쉼표로 여러 명 가능
+          from: "Naver Robot <${{ secrets.MAIL_USERNAME }}>"
+          body: |
+            안녕하세요,
+            첨부 파일은 전주 일요일 00:00부터 금주 일요일 24:00(KST)까지의 주간 집계입니다.
+            - 헤드라인/요약/키워드/규모/투자금액/공사지역/담당자연락처/원본링크 포함
+            감사합니다.
+          attachments: |
+            naver_news_*_07to07*.report.xlsx
+
