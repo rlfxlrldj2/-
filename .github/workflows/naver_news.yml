@@ -2,8 +2,8 @@ name: Naver News Daily 08:00 KST
 
 on:
   schedule:
-    - cron: "0 23 * * *"   # KST 08:00 == UTC 23:00 (전날)
-  workflow_dispatch:
+    - cron: "0 23 * * 6"   # 매주 일요일 08:00 KST
+  workflow_dispatch: {}     # 필요 시 수동 실행 계속 가능
 
 permissions:
   contents: write
