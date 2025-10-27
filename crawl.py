@@ -376,27 +376,37 @@ def main_run():
     out_csv = f"naver_news_{stamp}_07to07.csv"
     df_norm.to_csv(out_csv, index=False, encoding="utf-8-sig")
 
-    # 6) 엑셀 저장 — 키워드별 시트 (각 시트 내 URL 중복 제거)
-    out_xlsx = f"naver_news_{stamp}_07to07.report.xlsx"
-    cols_order = ["발주처 이름","프로젝트 이름","내용 요약(100자 이내)","담당자 연락처","규모","투자금액","공사지역","원본기사 URL 링크"]
+   # 6) 엑셀 저장 — 키워드별 시트 (각 시트 내 URL 중복 제거)
+out_xlsx = f"naver_news_{stamp}_07to07.report.xlsx"
+cols_order = ["발주처 이름","프로젝트 이름","내용 요약(100자 이내)","담당자 연락처","규모","투자금액","공사지역","원본기사 URL 링크"]
 
-    with pd.ExcelWriter(out_xlsx) as writer:
-        # 전체 시트(중복 제거 X, 전체 레코드 확인용)
-        all_df = df_norm[cols_order + ["pubDate_kst","title","matched_tags"]].copy()
-        all_df.to_excel(writer, index=False, sheet_name="전체")
+# ---- NEW: Excel 친화적 시각 열 만들기 (tz 제거) ----
+df_norm_excel = df_norm.copy()
+if "pubDate_kst" in df_norm_excel.columns:
+    # 1) Series로 안전하게 datetime 변환 (tz-aware/naive 섞여 있어도 처리)
+    dt = pd.to_datetime(df_norm_excel["pubDate_kst"], errors="coerce", utc=True)
+    # 2) UTC -> KST로 변환 후 tz정보 제거(naive)
+    dt_kst_naive = dt.dt.tz_convert("Asia/Seoul").dt.tz_localize(None)
+    df_norm_excel["게재시각(KST)"] = dt_kst_naive
+else:
+    df_norm_excel["게재시각(KST)"] = ""
 
-        # 키워드별 시트
-        for tag in BASE_KEYWORDS:
-            mask = df_norm["matched_tags"].apply(lambda lst: tag in lst if isinstance(lst, list) else False)
-            sub = df_norm[mask].copy()
-            # 같은 키워드 시트 안에서 URL 중복 제거
-            sub = sub.drop_duplicates(subset=["원본기사 URL 링크"])
-            # 표시 열만
-            sub = sub[cols_order]
-            sub.to_excel(writer, index=False, sheet_name=tag[:31])
+with pd.ExcelWriter(out_xlsx) as writer:
+    # 전체 시트(원하는 열 + 게재시각)
+    all_df = df_norm_excel[cols_order + ["게재시각(KST)","title","matched_tags"]].copy()
+    all_df.to_excel(writer, index=False, sheet_name="전체")
 
-    print(f"[완료] 기사 {len(df_norm)}건 → CSV: {out_csv}, XLSX: {out_xlsx}")
-    return out_csv, out_xlsx
+    # 키워드별 시트
+    for tag in BASE_KEYWORDS:
+        mask = df_norm_excel["matched_tags"].apply(lambda lst: tag in lst if isinstance(lst, list) else False)
+        sub = df_norm_excel[mask].copy()
+        # 같은 키워드 시트 안에서 URL 중복 제거
+        sub = sub.drop_duplicates(subset=["원본기사 URL 링크"])
+        sub = sub[cols_order + ["게재시각(KST)"]]  # 게재시각 포함
+        sub.to_excel(writer, index=False, sheet_name=tag[:31])
+
+print(f"[완료] 기사 {len(df_norm)}건 → CSV: {out_csv}, XLSX: {out_xlsx}")
+return out_csv, out_xlsx
 
 if __name__ == "__main__":
     try:
