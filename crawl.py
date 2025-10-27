@@ -366,12 +366,13 @@ def main_run():
             df_norm[c] = ""
     df_norm[csv_cols].to_csv(out_csv, index=False, encoding="utf-8-sig")
 
-    # 6) 엑셀 저장 — 열 순서 고정 + 게재시각(KST) tz 제거
-    out_xlsx = f"naver_news_{stamp}_07to07.report.xlsx"
+       # 6) 엑셀 저장 — 열 순서 고정 + 게재시각(KST) tz 제거 + 정렬/서식 적용
+    out_xlsx = f"naver_news_{stamp}_07to07_7days.report.xlsx"  # (원하시면 파일명 유지/변경)
     excel_order = [
         "게재시각(KST)","헤드라인","내용요약","키워드","규모","투자금액","공사지역","담당자 연락처","원본기사 URL 링크"
     ]
 
+    # 게재시각 생성 (tz 제거)
     df_norm_excel = df_norm.copy()
     if "pubDate_kst" in df_norm_excel.columns:
         dt = pd.to_datetime(df_norm_excel["pubDate_kst"], errors="coerce", utc=True)
@@ -380,26 +381,92 @@ def main_run():
     else:
         df_norm_excel["게재시각(KST)"] = ""
 
+    # 누락 열 보정
     for c in excel_order:
         if c not in df_norm_excel.columns:
             df_norm_excel[c] = ""
 
-    with pd.ExcelWriter(out_xlsx) as writer:
-        # 전체 시트: 지정 순서
+    # ▶ 정렬: 게재시각 내림차순
+    df_norm_excel = df_norm_excel.sort_values(by="게재시각(KST)", ascending=False, kind="mergesort")
+
+    # ===== openpyxl 서식 적용을 위해 스타일 import
+    from openpyxl.styles import Alignment, Font, PatternFill, Border, Side
+    from openpyxl.utils import get_column_letter
+
+    # 스타일 프리셋
+    header_fill = PatternFill(fill_type="solid", start_color="E2E2E2", end_color="E2E2E2")  # RGB(226,226,226)
+    base_font   = Font(name="Malgun Gothic", size=10)  # '맑은 고딕'
+    align_body  = Alignment(horizontal="left", vertical="center", wrap_text=True)
+    thin = Side(border_style="thin", color="000000")
+    border_all = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+    # 열 폭 지정
+    col_widths = {
+        "A": 18.6,  # 게재시각
+        "B": 65.0,  # 헤드라인
+        "C": 60.0,  # 내용요약
+        "D": 20.0,  # 키워드
+        "E": 8.5,   # 규모
+        "F": 8.5,   # 투자금액
+        "G": 22.0,  # 공사지역
+        "H": 13.5,  # 담당자 연락처
+        "I": 61.5,  # 원본기사 URL 링크
+    }
+
+    with pd.ExcelWriter(out_xlsx, engine="openpyxl") as writer:
+        # 전체 시트
         all_df = df_norm_excel[excel_order].copy()
         all_df.to_excel(writer, index=False, sheet_name="전체")
 
-        # 키워드별 시트(원하면 유지 — 전역 중복 제거 결과 그대로 사용)
+        wb = writer.book
+        ws_all = writer.sheets["전체"]
+
+        # 열 폭 설정
+        for col_letter, width in col_widths.items():
+            ws_all.column_dimensions[col_letter].width = width
+
+        # 헤더 서식
+        for cell in ws_all[1]:
+            cell.fill = header_fill
+            cell.font = base_font
+            cell.alignment = align_body
+            cell.border = border_all
+
+        # 본문 서식
+        for row in ws_all.iter_rows(min_row=2, max_row=ws_all.max_row, min_col=1, max_col=ws_all.max_column):
+            for cell in row:
+                cell.font = base_font
+                cell.alignment = align_body
+                cell.border = border_all
+
+        # 키워드별 시트 (있으면 동일 포맷 적용)
         for tag in BASE_KEYWORDS:
-            # 포함 검사(쉼표/공백 경계 고려)
             sub = df_norm_excel[df_norm_excel["키워드"].str.contains(
                 rf"(?:^|, ){re.escape(tag)}(?:, |$)", na=False)]
             if sub.empty:
                 continue
+            sub = sub.sort_values(by="게재시각(KST)", ascending=False, kind="mergesort")
             sub = sub[excel_order]
             sub.to_excel(writer, index=False, sheet_name=tag[:31])
 
-    print(f"[완료] 기사 {len(df_norm)}건 → CSV: {out_csv}, XLSX: {out_xlsx}")
+            ws = writer.sheets[tag[:31]]
+            # 열 폭
+            for col_letter, width in col_widths.items():
+                ws.column_dimensions[col_letter].width = width
+            # 헤더
+            for cell in ws[1]:
+                cell.fill = header_fill
+                cell.font = base_font
+                cell.alignment = align_body
+                cell.border = border_all
+            # 본문
+            for row in ws.iter_rows(min_row=2, max_row=ws.max_row, min_col=1, max_col=ws.max_column):
+                for cell in row:
+                    cell.font = base_font
+                    cell.alignment = align_body
+                    cell.border = border_all
+
+    print(f"[완료] 기사 {len(df_norm_excel)}건 → CSV: {out_csv}, XLSX: {out_xlsx}")
     return out_csv, out_xlsx
 
 if __name__ == "__main__":
