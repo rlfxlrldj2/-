@@ -69,6 +69,15 @@ jobs:
           git commit -m "daily: update naver news outputs" || echo "No changes"
           git push origin HEAD:${{ github.ref_name }}
 
+      - name: Check mail secrets
+        id: check_mail
+        shell: bash
+        run: |
+          ok=true
+          [ -n "${{ secrets.MAIL_USERNAME }}" ] || ok=false
+          [ -n "${{ secrets.MAIL_PASSWORD }}" ] || ok=false
+          [ -n "${{ secrets.MAIL_TO }}" ] || ok=false
+          echo "ok=$ok" >> "$GITHUB_OUTPUT"
 
       - name: Send email with weekly report
         if: ${{ secrets.MAIL_USERNAME != '' && secrets.MAIL_PASSWORD != '' && secrets.MAIL_TO != '' }}
