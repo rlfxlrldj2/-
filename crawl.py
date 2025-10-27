@@ -46,12 +46,24 @@ API_HEADERS = {
 }
 WEB_HEADERS = {k: v for k, v in API_HEADERS.items() if not k.startswith("X-Naver-")}
 
-def compute_window_kst(days: int = 7):
-    """종료시각: 오늘 07:00(KST), 시작시각: 종료시각에서 days일 전 07:00(KST)"""
+def compute_week_window_kst():
+    """
+    수집 기간:
+      - 시작: 지난주 일요일 00:00 (KST)
+      - 종료: 이번주 일요일 24:00 = 다음주 월요일 00:00 (KST, end-exclusive)
+    구현상으로는 '지난주 월요일 00:00 ~ 이번주 월요일 00:00'과 동일하므로
+    아래처럼 '월요일 00:00 기준'으로 계산합니다.
+    """
     kst = pytz.timezone(TIMEZONE)
     today_kst = datetime.now(kst).date()
-    end_kst = kst.localize(datetime.combine(today_kst, dtime(7, 0, 0)))
-    start_kst = end_kst - timedelta(days=days)
+
+    # 이번 주 월요일 00:00 (KST)
+    this_week_mon = today_kst - timedelta(days=today_kst.weekday())
+    end_kst = kst.localize(datetime.combine(this_week_mon, dtime(0, 0, 0)))  # end-exclusive
+
+    # 지난 주 월요일 00:00 (KST)
+    start_kst = end_kst - timedelta(days=7)
+
     return start_kst, end_kst
 
 def _is_naver_host(url: str) -> bool:
@@ -233,7 +245,7 @@ def summarize_100(text):
 
 def main_run():
     kst = pytz.timezone(TIMEZONE)
-    START_KST, END_KST = compute_window_kst()
+    START_KST, END_KST = compute_week_window_kst()  # ← 주간 윈도우로 변경
 
     # 1) 기사 URL 수집
     items = collect_all_items(QUERIES, PER_QUERY_LIMIT)
