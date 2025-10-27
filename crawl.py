@@ -30,7 +30,7 @@ KW_EXPANSIONS = {
 
 # 검색 규모(필요 시 조절)
 PER_BASE_LIMIT   = 2     # 각 기본 키워드당 확장어 몇 개까지 검색에 사용할지
-PER_QUERY_LIMIT  = 120   # 쿼리당 최대 기사 수
+PER_QUERY_LIMIT  = 40   # 쿼리당 최대 기사 수
 ONLY_NAVER_DOMAIN = True # 네이버 뉴스 도메인만 사용
 MIN_CHARS        = 200   # 본문 최소 길이(짧은 페이지 제외)
 TIMEZONE         = "Asia/Seoul"
