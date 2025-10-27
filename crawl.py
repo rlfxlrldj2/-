@@ -46,12 +46,12 @@ API_HEADERS = {
 }
 WEB_HEADERS = {k: v for k, v in API_HEADERS.items() if not k.startswith("X-Naver-")}
 
-def compute_window_kst():
-    """전날 07:00 ~ 오늘 07:00 (KST)"""
+def compute_window_kst(days: int = 7):
+    """종료시각: 오늘 07:00(KST), 시작시각: 종료시각에서 days일 전 07:00(KST)"""
     kst = pytz.timezone(TIMEZONE)
     today_kst = datetime.now(kst).date()
     end_kst = kst.localize(datetime.combine(today_kst, dtime(7, 0, 0)))
-    start_kst = end_kst - timedelta(days=1)
+    start_kst = end_kst - timedelta(days=days)
     return start_kst, end_kst
 
 def _is_naver_host(url: str) -> bool:
