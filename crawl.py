@@ -1,6 +1,6 @@
-import os, time, random, hashlib, re
+import os, time, random, re
 from urllib.parse import urlparse
-from datetime import datetime, date, time as dtime, timedelta
+from datetime import datetime, time as dtime, timedelta
 
 import pytz
 import requests
@@ -14,26 +14,22 @@ from tqdm import tqdm
 
 # ===================== 사용자 요건 반영 설정 =====================
 
-# 기준 키워드 (요청)
-BASE_KEYWORDS = ["신축", "증설", "증축", "설비 증설", "시설 투자", "투자 협약", "투자 유치"]
+# 기준 키워드 (사용자 지정 "그대로"만 사용)
+BASE_KEYWORDS = [
+    "공장 신설", "공장 신축", "공장 신규", "신축공사",
+    "공장 증설", "생산능력 확대", "증설공사",
+    "공장 증축", "증축 공사", "증축공사",
+    "설비증설", "장비 증설", "라인 증설", "증설 공사",
+    "시설투자", "시설 투자", "설비투자", "공장 투자", "신규 투자",
+    "투자협약",
+    "투자유치", "유치 협약", "투자 유치",
+]
 
-# 유사어/변형 (요청)
-KW_EXPANSIONS = {
-    "신축":       ["공장 신설", "공장 신축", "공장 신규", "신축공사"],
-    "증설":       ["공장 증설", "규모 확대", "확충", "생산능력 확대", "증설공사"],
-    "증축":       ["공장 증축", "증축 공사", "증축공사"],
-    "설비 증설":  ["설비증설", "장비 증설", "라인 증설", "증설 공사"],
-    "시설 투자":  ["시설투자", "시설 투자", "설비투자", "공장 투자"],
-    "투자 협약":  ["투자협약", "투자 MOU", "공장 투자"],
-    "투자 유치":  ["투자유치", "유치 협약", "투자 유치"],
-}
-
-# 검색 규모(필요 시 조절)
-PER_BASE_LIMIT   = 2     # 각 기본 키워드당 확장어 몇 개까지 검색에 사용할지
-PER_QUERY_LIMIT  = 40    # 쿼리당 최대 기사 수(속도용으로 40으로 설정)
-ONLY_NAVER_DOMAIN = True # 네이버 뉴스 도메인만 사용
-MIN_CHARS        = 200   # 본문 최소 길이(짧은 페이지 제외)
-TIMEZONE         = "Asia/Seoul"
+# (확장어/유사어 사용 안 함)
+PER_QUERY_LIMIT   = 40    # 쿼리당 최대 기사 수(속도/한도 고려)
+ONLY_NAVER_DOMAIN = True  # 네이버 뉴스 도메인만 수집
+MIN_CHARS         = 200   # 본문 최소 길이
+TIMEZONE          = "Asia/Seoul"
 
 # ===================== 네이버 검색 Open API =====================
 
@@ -68,21 +64,8 @@ def _is_naver_host(url: str) -> bool:
     except Exception:
         return False
 
-def build_queries(base_keywords, expansions, per_base_limit=1):
-    q = []
-    for base in base_keywords:
-        q.append(base)
-        for i, alt in enumerate(expansions.get(base, [])):
-            if i >= per_base_limit: break
-            q.append(alt)
-    # 순서 유지 중복 제거
-    seen, deduped = set(), []
-    for s in q:
-        if s not in seen:
-            deduped.append(s); seen.add(s)
-    return deduped
-
-QUERIES = build_queries(BASE_KEYWORDS, KW_EXPANSIONS, per_base_limit=PER_BASE_LIMIT)
+# ====== 검색 쿼리: 지정 키워드만 사용 ======
+QUERIES = BASE_KEYWORDS[:]  # 확장어/유사어 없이 그대로 사용
 
 @sleep_and_retry
 @limits(calls=20, period=60)
@@ -150,10 +133,10 @@ def extract_fulltext(url: str):
         return _clean_text(text), final_url
     return extract_article_text_from_html(html), final_url
 
-# ===================== 키워드 매칭(요청 키워드/유사어) =====================
+# ===================== 키워드 매칭 =====================
 
 def _make_kw_regex(w: str) -> str:
-    """공백/중간점 허용 정규식(치환문자 \\s 문제 방지)"""
+    """공백/중간점(·, ㆍ)만 유연 허용 (완전 일치 원하면 이 함수를 return re.escape(w)로 바꾸세요)"""
     parts = []
     for ch in w:
         if ch.isspace():
@@ -164,23 +147,20 @@ def _make_kw_regex(w: str) -> str:
             parts.append(re.escape(ch))
     return "".join(parts)
 
-# per-tag 패턴
+# 지정 키워드만 패턴으로 사용 (확장어 사용 안 함)
 TAG_PATTERNS = {}
 for tag in BASE_KEYWORDS:
-    pats = [re.compile(_make_kw_regex(tag))]
-    for alt in KW_EXPANSIONS.get(tag, []):
-        pats.append(re.compile(_make_kw_regex(alt)))
-    TAG_PATTERNS[tag] = pats
+    TAG_PATTERNS[tag] = [re.compile(_make_kw_regex(tag))]
 
 def find_tags_for_article(title: str, snippet: str, text: str):
-    """한 기사에서 매칭되는 모든 태그(키워드)를 반환"""
+    """한 기사에서 매칭되는 모든 태그(키워드) 반환"""
     full = f"{title}\n{snippet}\n{text}"
-    hit_tags = []
-    for tag in BASE_KEYWORDS:  # 요청 순서 우선
+    hit = []
+    for tag in BASE_KEYWORDS:  # 지정 순서 = 우선순위
         pats = TAG_PATTERNS[tag]
         if any(p.search(title) for p in pats) or any(p.search(full) for p in pats):
-            hit_tags.append(tag)
-    return hit_tags
+            hit.append(tag)
+    return hit
 
 # ===================== 필드 추출(요청 양식) =====================
 
@@ -301,7 +281,6 @@ def main_run():
         try:
             text, final_url = extract_fulltext(chosen)
         except Exception:
-            # 원문으로 재시도
             if origin and origin != chosen:
                 try:
                     text, final_url = extract_fulltext(origin)
@@ -329,7 +308,6 @@ def main_run():
         time.sleep(random.uniform(0.1, 0.3))
 
     if not rows:
-        # 빈 결과라도 CSV/엑셀 경로는 리턴
         stamp = datetime.now().strftime("%Y%m%d")
         out_csv = f"naver_news_{stamp}_07to07.csv"
         pd.DataFrame(rows).to_csv(out_csv, index=False, encoding="utf-8-sig")
@@ -349,7 +327,7 @@ def main_run():
         full = f"{title}\n{snippet}\n{text}"
 
         client = extract_client(title, text) if text else extract_client(title, snippet)
-        project_name = title  # 보수적으로 제목 사용
+        project_name = title
         summary_100 = summarize_100(text or snippet)
         contact = extract_phone(full)
         scale = extract_scale(full)
@@ -383,8 +361,8 @@ def main_run():
     # ---- Excel 친화적 시각 열 만들기 (tz 제거) ----
     df_norm_excel = df_norm.copy()
     if "pubDate_kst" in df_norm_excel.columns:
-        dt = pd.to_datetime(df_norm_excel["pubDate_kst"], errors="coerce", utc=True)  # 혼합형 안전 변환
-        dt_kst_naive = dt.dt.tz_convert("Asia/Seoul").dt.tz_localize(None)            # tz 제거
+        dt = pd.to_datetime(df_norm_excel["pubDate_kst"], errors="coerce", utc=True)
+        dt_kst_naive = dt.dt.tz_convert("Asia/Seoul").dt.tz_localize(None)
         df_norm_excel["게재시각(KST)"] = dt_kst_naive
     else:
         df_norm_excel["게재시각(KST)"] = ""
@@ -398,7 +376,6 @@ def main_run():
         for tag in BASE_KEYWORDS:
             mask = df_norm_excel["matched_tags"].apply(lambda lst: tag in lst if isinstance(lst, list) else False)
             sub = df_norm_excel[mask].copy()
-            # 같은 키워드 시트 안에서 URL 중복 제거
             sub = sub.drop_duplicates(subset=["원본기사 URL 링크"])
             sub = sub[cols_order + ["게재시각(KST)"]]
             sub.to_excel(writer, index=False, sheet_name=tag[:31])
