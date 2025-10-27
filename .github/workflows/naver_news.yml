@@ -1,16 +1,73 @@
-name: Naver News Quick Self Test
+name: Naver News Daily 08:00 KST
 
 on:
-  workflow_dispatch:   # 수동 실행 버튼
+  schedule:
+    - cron: "0 23 * * 0"   # 매주 일요일 23:00 UTC == 월요일 08:00 KST
+  workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
-  test:
+  crawl:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      TZ: Asia/Seoul
+
     steps:
-      - name: Print context
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.ref }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Verify required secrets exist
         run: |
-          echo "event_name=${{ github.event_name }}"
-          echo "ref_name=${{ github.ref_name }}"
+          python - <<'PY'
+          import os, sys
+          miss=[k for k in ("NAVER_CLIENT_ID","NAVER_CLIENT_SECRET") if not os.getenv(k)]
+          if miss:
+              print("Missing secrets:", miss)
+              sys.exit(1)
+          print("All required secrets exist.")
+          PY
+        env:
+          NAVER_CLIENT_ID: ${{ secrets.NAVER_CLIENT_ID }}
+          NAVER_CLIENT_SECRET: ${{ secrets.NAVER_CLIENT_SECRET }}
+
+      - name: Install deps
+        run: pip install -r requirements.txt
+
+      - name: Run crawler
+        env:
+          NAVER_CLIENT_ID: ${{ secrets.NAVER_CLIENT_ID }}
+          NAVER_CLIENT_SECRET: ${{ secrets.NAVER_CLIENT_SECRET }}
+        run: python crawl.py
+
+      - name: Upload artifacts (CSV/XLSX)
+        uses: actions/upload-artifact@v4
+        with:
+          name: naver_news_outputs
+          path: |
+            naver_news_*_07to07.csv
+            naver_news_*_07to07.report.xlsx
+          if-no-files-found: warn
+
+      - name: Commit outputs
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add *.csv *.xlsx || true
+          git commit -m "daily: update naver news outputs" || echo "No changes"
+          git push origin HEAD:${{ github.ref_name }}
 
       - name: Check mail secrets
         id: check_mail
@@ -21,15 +78,24 @@ jobs:
           [ -n "${{ secrets.MAIL_PASSWORD }}" ] || ok=false
           [ -n "${{ secrets.MAIL_TO }}" ] || ok=false
           echo "ok=$ok" >> "$GITHUB_OUTPUT"
-          echo "::notice title=Mail secrets::ok=$ok"
 
-      - name: Make dummy outputs
-        run: |
-          echo "HELLO $(date -u)" > demo.txt
-          echo "MAIL_OK=${{ steps.check_mail.outputs.ok }}" >> demo.txt
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+      - name: Send email with weekly report
+        if: ${{ secrets.MAIL_USERNAME != '' && secrets.MAIL_PASSWORD != '' && secrets.MAIL_TO != '' }}
+        uses: dawidd6/action-send-mail@v6
         with:
-          name: demo
-          path: demo.txt
+          server_address: smtp.gmail.com
+          server_port: 465
+          secure: true
+          username: ${{ secrets.MAIL_USERNAME }}     # 전체 Gmail 주소
+          password: ${{ secrets.MAIL_PASSWORD }}     # Gmail 앱 비밀번호(16자리)
+          subject: "Naver News 주간집계 (일→일)"
+          to: ${{ secrets.MAIL_TO }}                 # 쉼표로 여러 명 가능
+          from: "Naver Robot <${{ secrets.MAIL_USERNAME }}>"
+          body: |
+            안녕하세요,
+            첨부 파일은 전주 일요일 00:00부터 금주 일요일 24:00(KST)까지의 주간 집계입니다.
+            - 헤드라인/요약/키워드/규모/투자금액/공사지역/담당자연락처/원본링크 포함
+            감사합니다.
+          attachments: |
+            naver_news_*_07to07*.report.xlsx
+
