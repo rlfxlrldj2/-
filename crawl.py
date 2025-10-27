@@ -14,7 +14,7 @@ from tqdm import tqdm
 
 # ===================== 사용자 요건 반영 설정 =====================
 
-# 기준 키워드 (사용자 지정 "그대로"만 사용)
+# 지정 키워드만 사용 (확장어/유사어 OFF)
 BASE_KEYWORDS = [
     "공장 신설", "공장 신축", "공장 신규", "신축공사",
     "공장 증설", "생산능력 확대", "증설공사",
@@ -25,7 +25,6 @@ BASE_KEYWORDS = [
     "투자유치", "유치 협약", "투자 유치",
 ]
 
-# (확장어/유사어 사용 안 함)
 PER_QUERY_LIMIT   = 40    # 쿼리당 최대 기사 수(속도/한도 고려)
 ONLY_NAVER_DOMAIN = True  # 네이버 뉴스 도메인만 수집
 MIN_CHARS         = 200   # 본문 최소 길이
@@ -136,7 +135,9 @@ def extract_fulltext(url: str):
 # ===================== 키워드 매칭 =====================
 
 def _make_kw_regex(w: str) -> str:
-    """공백/중간점(·, ㆍ)만 유연 허용 (완전 일치 원하면 이 함수를 return re.escape(w)로 바꾸세요)"""
+    """공백/중간점(·, ㆍ)만 유연 허용
+    *완전 일치만 원하면 return re.escape(w) 로 바꾸세요.
+    """
     parts = []
     for ch in w:
         if ch.isspace():
@@ -162,7 +163,7 @@ def find_tags_for_article(title: str, snippet: str, text: str):
             hit.append(tag)
     return hit
 
-# ===================== 필드 추출(요청 양식) =====================
+# ===================== 필드 추출(요청 정의에 맞춤) =====================
 
 PHONE_RE = re.compile(r"(0\d{1,2})[-.\s]?\d{3,4}[-.\s]?\d{4}")
 
@@ -176,7 +177,7 @@ AMOUNT_PATTERNS = [
 SCALE_PATTERNS = [
     re.compile(r"규모[^\n]{0,20}?([0-9,\.]+\s*(?:㎡|m²|평|MW|GW|라인|대|톤|t|기|명))"),
     re.compile(r"연면적\s*[:은]?\s*([0-9,\.]+\s*(?:㎡|m²|평))"),
-    re.compile(r"(?:부지|대지)\s*(?:면적)?\s*[:은]?\s*([0-9,\.]+\s*(?:㎡|m²|평))"),
+    re.compile(r"(?:건축면적|대지면적|부지면적|부지|대지)\s*[:은]?\s*([0-9,\.]+\s*(?:㎡|m²|평))"),
     re.compile(r"(?:생산|CAPA|캐파)[^\n]{0,10}?([0-9,\.]+\s*(?:톤|t|K|k|만|억|라인))"),
 ]
 
@@ -185,12 +186,6 @@ LOC_RE = re.compile(
     r"경기도|강원특별자치도|강원도|충청북도|충북|충청남도|충남|전라북도|전북|전라남도|전남|경상북도|경북|경상남도|경남|제주특별자치도|제주)"
     r"(?:\s*[가-힣0-9]{1,10}(?:시|군|구))?(?:\s*[가-힣0-9]{1,10}(?:읍|면|동|리))?"
 )
-
-CLIENT_PATTERNS = [
-    re.compile(r"발주(?:처)?\s*[:는]\s*([^\n,.;()]+)"),
-    re.compile(r"(주식회사\s*[가-힣A-Za-z0-9·\(\)\s]+|㈜\s*[가-힣A-Za-z0-9·\(\)\s]+|\(주\)\s*[가-힣A-Za-z0-9·\(\)\s]+)"),
-    re.compile(r"[가-힣A-Za-z0-9·\(\)\s]{2,30}(?:공사|공단|개발공사|개발공단|도청|시청|군청|구청|경제자유구역청|테크노파크|산업단지공단)"),
-]
 
 def extract_first(patterns, text):
     for p in patterns:
@@ -227,13 +222,6 @@ def extract_phone(text):
 def extract_location(text):
     m = LOC_RE.search(text)
     return m.group(0) if m else ""
-
-def extract_client(title, text):
-    candidate = extract_first(CLIENT_PATTERNS, text)
-    if candidate:
-        return candidate.strip()
-    candidate = extract_first(CLIENT_PATTERNS, title)
-    return candidate.strip()
 
 def summarize_100(text):
     if not text:
@@ -292,10 +280,14 @@ def main_run():
         if len(text) < MIN_CHARS:
             continue
 
-        # 3) 키워드 태그 부여(여러 개 가능)
+        # 키워드 태그 부여(여러 개 가능)
         tags = find_tags_for_article(title, desc, text)
         if not tags:
             continue
+
+        # 담당자 연락처(기사 전체에서 추출; 없으면 공란)
+        full_for_contact = f"{title}\n{desc}\n{text}"
+        contact = extract_phone(full_for_contact)
 
         rows.append({
             "pubDate_kst": pub_kst,
@@ -303,7 +295,8 @@ def main_run():
             "snippet": desc,
             "used_url": final_url,
             "text": text,
-            "matched_tags": tags,  # list
+            "matched_tags": tags,     # list
+            "contact": contact,       # 담당자 연락처(없으면 공란)
         })
         time.sleep(random.uniform(0.1, 0.3))
 
@@ -319,46 +312,66 @@ def main_run():
 
     df = pd.DataFrame(rows)
 
-    # 4) 요청 포맷으로 정규화 컬럼 만들기
+    # 3) 요청 포맷으로 정규화 컬럼 만들기
     def build_row(row):
         title = str(row.get("title","")).strip()
         text  = str(row.get("text","")).strip()
         snippet = str(row.get("snippet","")).strip()
         full = f"{title}\n{snippet}\n{text}"
 
-        client = extract_client(title, text) if text else extract_client(title, snippet)
-        project_name = title
-        summary_100 = summarize_100(text or snippet)
-        contact = extract_phone(full)
-        scale = extract_scale(full)
-        invest = extract_investment(full)
-        location = extract_location(full)
+        summary_100 = summarize_100(text or snippet)   # 내용요약(100자)
+        scale = extract_scale(full)                    # 규모(연면적/건축면적 등)
+        invest = extract_investment(full)              # 투자금액/예상금액
+        location = extract_location(full)              # 공사지역(도/시/군/구…)
         url = row.get("used_url") or ""
+        contact = row.get("contact","")
 
         return pd.Series({
-            "발주처 이름": client,
-            "프로젝트 이름": project_name,
-            "내용 요약(100자 이내)": summary_100,
-            "담당자 연락처": contact,
+            "헤드라인": title,
+            "내용요약": summary_100,
             "규모": scale,
             "투자금액": invest,
             "공사지역": location,
-            "원본기사 URL 링크": url
+            "담당자 연락처": contact,
+            "원본기사 URL 링크": url,
         })
 
     norm = df.apply(build_row, axis=1)
-    df_norm = pd.concat([df[["pubDate_kst","title","matched_tags","used_url"]], norm], axis=1)
 
-    # 5) CSV 저장(원문 전체 표)
+    # 키워드 열: 매칭된 지정 키워드들을 ', '로 연결 (지정 순서 유지)
+    def tags_to_str(tags_list):
+        if not isinstance(tags_list, list):
+            return ""
+        ordered = [t for t in BASE_KEYWORDS if t in tags_list]
+        return ", ".join(ordered)
+
+    df_norm = pd.concat([
+        df[["pubDate_kst","matched_tags"]],
+        norm
+    ], axis=1)
+    df_norm["키워드"] = df_norm["matched_tags"].apply(tags_to_str)
+    df_norm.drop(columns=["matched_tags"], inplace=True)
+
+    # 4) 전역 중복 제거: 같은 URL은 첫 1건만 유지
+    df_norm = df_norm.drop_duplicates(subset=["원본기사 URL 링크"]).copy()
+
+    # 5) CSV 저장(요청 열만; pubDate_kst는 엑셀용 게재시각 생성에 사용)
     stamp = datetime.now().strftime("%Y%m%d")
     out_csv = f"naver_news_{stamp}_07to07.csv"
-    df_norm.to_csv(out_csv, index=False, encoding="utf-8-sig")
+    csv_cols = [
+        "헤드라인","내용요약","키워드","규모","투자금액","공사지역","담당자 연락처","원본기사 URL 링크","pubDate_kst"
+    ]
+    for c in csv_cols:
+        if c not in df_norm.columns:
+            df_norm[c] = ""
+    df_norm[csv_cols].to_csv(out_csv, index=False, encoding="utf-8-sig")
 
-    # 6) 엑셀 저장 — 키워드별 시트 (각 시트 내 URL 중복 제거)
+    # 6) 엑셀 저장 — 열 순서 고정 + 게재시각(KST) tz 제거
     out_xlsx = f"naver_news_{stamp}_07to07.report.xlsx"
-    cols_order = ["발주처 이름","프로젝트 이름","내용 요약(100자 이내)","담당자 연락처","규모","투자금액","공사지역","원본기사 URL 링크"]
+    excel_order = [
+        "게재시각(KST)","헤드라인","내용요약","키워드","규모","투자금액","공사지역","담당자 연락처","원본기사 URL 링크"
+    ]
 
-    # ---- Excel 친화적 시각 열 만들기 (tz 제거) ----
     df_norm_excel = df_norm.copy()
     if "pubDate_kst" in df_norm_excel.columns:
         dt = pd.to_datetime(df_norm_excel["pubDate_kst"], errors="coerce", utc=True)
@@ -367,17 +380,23 @@ def main_run():
     else:
         df_norm_excel["게재시각(KST)"] = ""
 
+    for c in excel_order:
+        if c not in df_norm_excel.columns:
+            df_norm_excel[c] = ""
+
     with pd.ExcelWriter(out_xlsx) as writer:
-        # 전체 시트(요청 열 + 게재시각)
-        all_df = df_norm_excel[cols_order + ["게재시각(KST)"]].copy()
+        # 전체 시트: 지정 순서
+        all_df = df_norm_excel[excel_order].copy()
         all_df.to_excel(writer, index=False, sheet_name="전체")
 
-        # 키워드별 시트
+        # 키워드별 시트(원하면 유지 — 전역 중복 제거 결과 그대로 사용)
         for tag in BASE_KEYWORDS:
-            mask = df_norm_excel["matched_tags"].apply(lambda lst: tag in lst if isinstance(lst, list) else False)
-            sub = df_norm_excel[mask].copy()
-            sub = sub.drop_duplicates(subset=["원본기사 URL 링크"])
-            sub = sub[cols_order + ["게재시각(KST)"]]
+            # 포함 검사(쉼표/공백 경계 고려)
+            sub = df_norm_excel[df_norm_excel["키워드"].str.contains(
+                rf"(?:^|, ){re.escape(tag)}(?:, |$)", na=False)]
+            if sub.empty:
+                continue
+            sub = sub[excel_order]
             sub.to_excel(writer, index=False, sheet_name=tag[:31])
 
     print(f"[완료] 기사 {len(df_norm)}건 → CSV: {out_csv}, XLSX: {out_xlsx}")
