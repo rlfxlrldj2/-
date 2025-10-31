@@ -52,13 +52,21 @@ jobs:
           NAVER_CLIENT_SECRET: ${{ secrets.NAVER_CLIENT_SECRET }}
         run: python crawl.py
 
+      # ▶ 산출물이 실제로 생성됐는지 즉시 확인(디버그용)
+      - name: List outputs in workspace
+        run: |
+          pwd
+          ls -al
+          echo "---- CSV ----";  ls -al naver_news_*_07to07.csv || true
+          echo "---- XLSX ----"; ls -al naver_news_*_07to07*.report.xlsx || true
+
       - name: Upload artifacts (CSV/XLSX)
         uses: actions/upload-artifact@v4
         with:
           name: naver_news_outputs
           path: |
             naver_news_*_07to07.csv
-            naver_news_*_07to07.report.xlsx
+            naver_news_*_07to07*.report.xlsx   # ← 패턴 보강
           if-no-files-found: warn
 
       - name: Commit outputs
@@ -80,7 +88,7 @@ jobs:
           echo "ok=$ok" >> "$GITHUB_OUTPUT"
 
       - name: Send email with weekly report
-        if: ${{ secrets.MAIL_USERNAME != '' && secrets.MAIL_PASSWORD != '' && secrets.MAIL_TO != '' }}
+        if: ${{ steps.check_mail.outputs.ok == 'true' }}   # ← secrets 직접 비교 대신 출력값 사용
         uses: dawidd6/action-send-mail@v6
         with:
           server_address: smtp.gmail.com
@@ -98,4 +106,3 @@ jobs:
             감사합니다.
           attachments: |
             naver_news_*_07to07*.report.xlsx
-
