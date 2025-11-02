@@ -14,21 +14,52 @@ from tqdm import tqdm
 
 # ===================== 사용자 요건 반영 설정 =====================
 
-# 지정 키워드만 사용 (확장어/유사어 OFF)
-BASE_KEYWORDS = [
-    "공장 신설", "공장 신축", "공장 신규", "신축공사",
-    "공장 증설", "생산능력 확대", "증설공사",
-    "공장 증축", "증축 공사", "증축공사",
-    "설비증설", "장비 증설", "라인 증설", "증설 공사",
-    "시설투자", "시설 투자", "설비투자", "공장 투자", "신규 투자",
-    "투자협약",
-    "투자유치", "유치 협약", "투자 유치",
+# ====== [A] 키워드 세트: 네이버 API 검색용 쿼리 ======
+INVEST_KEYWORDS = [
+    "투자 협약", "투자협약", "투자 유치", "투자유치", "투자 MOU", "MOU 체결",
+    "시설 투자", "시설투자", "설비 투자", "설비투자", "신규 투자", "대규모 투자",
+    "공장 투자", "생산기지 투자", "산업단지 투자", "산단 투자",
+]
+BUILD_KEYWORDS = [
+    "신축", "신축공사", "증축", "증축공사", "증개축", "리모델링", "개보수", "대수선",
+    "착공", "기공식", "준공", "완공",
+    "설계공모", "설계 공모", "입찰 공고", "입찰공고", "시공사 선정", "발주", "공사 발주",
+]
+INDUSTRIAL_OBJECTS = [
+    "공장", "생산시설", "제조시설", "클린룸", "FAB", "팹", "라인", "생산라인",
+    "데이터센터", "물류센터", "물류창고",
+    "R&D센터", "연구소", "테스트베드", "캠퍼스", "연수원", "본사 사옥", "사옥",
+    "산업단지", "산단", "일반산단", "국가산단",
+]
+INDUSTRIAL_ACTIONS = [
+    "설비 증설", "설비증설", "설비 확충", "설비 교체", "설비 도입",
+    "라인 증설", "라인 확충", "생산라인 증설",
+    "생산능력 확대", "CAPA 확대", "캐파 확대",
+    "공장 증설", "공장 신축", "공장 증축", "신공장 건립", "신공장 건설",
+]
+# (선택) 아래 2개는 필요 시 주석 해제해서 BASE_KEYWORDS에 포함 가능
+ARCH_OBJECTS = [
+    "건축물", "건물", "빌딩", "주택", "아파트", "오피스텔",
+    "학교", "병원", "도서관", "체육관", "공공청사", "청사", "법원",
+    "박물관", "미술관", "역사", "터미널", "공항 터미널",
+]
+LIFECYCLE_TRIGGERS = [
+    "개발 계획", "개발계획", "실시설계", "기본설계",
+    "도시계획 변경", "용도지역 변경", "산단 지정", "산단 승인",
+    "건축허가", "인허가", "사전심의", "환경영향평가",
 ]
 
-PER_QUERY_LIMIT   = 40    # 쿼리당 최대 기사 수(속도/한도 고려)
+BASE_KEYWORDS = sorted(list(set(
+    INVEST_KEYWORDS + BUILD_KEYWORDS + INDUSTRIAL_ACTIONS + INDUSTRIAL_OBJECTS
+    # + ARCH_OBJECTS + LIFECYCLE_TRIGGERS   # 필요하면 포함
+)))
+QUERIES = BASE_KEYWORDS[:]   # ← 네이버 API 검색 쿼리로 사용
+
+PER_QUERY_LIMIT   = 60    # 쿼리당 최대 기사 수(속도/한도 고려)
 ONLY_NAVER_DOMAIN = True  # 네이버 뉴스 도메인만 수집
 MIN_CHARS         = 200   # 본문 최소 길이
 TIMEZONE          = "Asia/Seoul"
+
 
 # ===================== 네이버 검색 Open API =====================
 
@@ -49,21 +80,18 @@ WEB_HEADERS = {k: v for k, v in API_HEADERS.items() if not k.startswith("X-Naver
 def compute_week_window_kst():
     """
     수집 기간:
-      - 시작: 지난주 일요일 00:00 (KST)
+      - 시작: 지난주 일요일 00:00 (KST) ≒ 지난주 월요일 00:00 기준 주간
       - 종료: 이번주 일요일 24:00 = 다음주 월요일 00:00 (KST, end-exclusive)
     구현상으로는 '지난주 월요일 00:00 ~ 이번주 월요일 00:00'과 동일하므로
     아래처럼 '월요일 00:00 기준'으로 계산합니다.
     """
     kst = pytz.timezone(TIMEZONE)
     today_kst = datetime.now(kst).date()
-
     # 이번 주 월요일 00:00 (KST)
     this_week_mon = today_kst - timedelta(days=today_kst.weekday())
     end_kst = kst.localize(datetime.combine(this_week_mon, dtime(0, 0, 0)))  # end-exclusive
-
     # 지난 주 월요일 00:00 (KST)
     start_kst = end_kst - timedelta(days=7)
-
     return start_kst, end_kst
 
 def _is_naver_host(url: str) -> bool:
@@ -175,6 +203,75 @@ def find_tags_for_article(title: str, snippet: str, text: str):
             hit.append(tag)
     return hit
 
+# ====== 2차 필터 & 자동 태깅 ======
+# 금융/부동산상품/소프트웨어 위주 기사 제거(공장/라인/반도체/배터리 등은 '포함' 신호이므로 제외 목록에 넣지 않음)
+EXCLUDE_KEYWORDS = [
+    "증권", "주가", "지분", "배당", "리츠", "펀드", "ETF",
+    "자산운용", "브로커리지", "리서치센터",
+    "대출", "여신", "금리", "채권", "회사채", "유상증자",
+    "아파트 분양", "청약", "전세", "월세", "임대료",
+    "소프트웨어", "플랫폼", "콘텐츠 제작", "게임 개발",
+]
+NEGATIVE_SOFT = re.compile("|".join(map(re.escape, EXCLUDE_KEYWORDS)))
+
+# 건축 기사 판별 (행위 AND 대상)
+ARCH_ACTION_RE = re.compile(r"(신축|증축|증개축|리모델링|개보수|대수선|착공|준공|설계공모|설계\s*공모|입찰\s*공고|시공사\s*선정|발주)")
+ARCH_OBJECT_RE = re.compile(r"(건축|건축물|건물|빌딩|주택|아파트|오피스텔|학교|병원|도서관|체육관|공공청사|청사|법원|터미널|역사|공항|물류센터|데이터센터|박물관|미술관|연수원|기숙사|연구동|공장)")
+
+def is_arch_article(title: str, text: str) -> bool:
+    full = f"{title}\n{text}"
+    if NEGATIVE_SOFT.search(full):
+        return False
+    return bool(ARCH_ACTION_RE.search(full) and ARCH_OBJECT_RE.search(full))
+
+# 산업시설(공장/설비/라인) 증설/신축 판별 (행위 AND 대상)
+INDUSTRIAL_ACTION_RE = re.compile(
+    r"(설비\s*(증설|확충|교체|도입)|라인\s*(증설|확충)|생산라인\s*증설|생산능력\s*확대|CAPA\s*확대|캐파\s*확대|공장\s*(신축|증축|증설|건립))"
+)
+INDUSTRIAL_OBJECT_RE = re.compile(
+    r"(공장|생산시설|제조시설|클린룸|FAB|팹|라인|생산라인|데이터센터|물류센터|물류창고|R&D센터|연구소|테스트베드|캠퍼스|연수원|사옥|산업단지|산단)"
+)
+
+def is_industrial_facility(title: str, text: str) -> bool:
+    full = f"{title}\n{text}"
+    if NEGATIVE_SOFT.search(full):
+        return False
+    return bool(INDUSTRIAL_ACTION_RE.search(full) and INDUSTRIAL_OBJECT_RE.search(full))
+
+def should_keep_article(title: str, text: str) -> bool:
+    # 건축 기사 또는 산업시설(공장/설비/라인) 증설/신축 기사면 통과
+    return is_arch_article(title, text) or is_industrial_facility(title, text)
+
+# 엑셀 자동 태깅
+TYPE_RULES = {
+  "신규 투자":   re.compile(r"(투자\s*(협약|유치)|MOU|시설투자|설비투자|신규\s*투자|대규모\s*투자)"),
+  "공장 신축":   re.compile(r"(공장\s*(신축|건립|건설)|신공장)"),
+  "시설 증설":   re.compile(r"(증설|확충|라인\s*증설|CAPA\s*확대|캐파\s*확대|생산라인\s*증설|설비\s*(증설|도입|교체))"),
+  "입찰/시공":   re.compile(r"(입찰\s*공고|시공사\s*선정|발주)"),
+  "준공/완공":   re.compile(r"(준공|완공)"),
+}
+TARGET_RULES = {
+  "공장":       re.compile(r"공장|FAB|팹|클린룸"),
+  "데이터센터":  re.compile(r"데이터센터"),
+  "물류센터":    re.compile(r"물류센터|물류창고"),
+  "연구/R&D":   re.compile(r"R&D센터|연구소|테스트베드"),
+  "사옥/본사":   re.compile(r"사옥|본사"),
+  "산단":       re.compile(r"산업단지|산단"),
+  "기타건축":    re.compile(r"학교|병원|도서관|체육관|청사|역사|터미널|박물관|미술관"),
+}
+
+def detect_types(title: str, text: str):
+    full = f"{title}\n{text}"
+    hits = [k for k, rx in TYPE_RULES.items() if rx.search(full)]
+    order = {"신규 투자":0, "공장 신축":1, "시설 증설":2, "입찰/시공":3, "준공/완공":4}
+    return sorted(hits, key=lambda x: order.get(x, 99))
+
+def detect_targets(title: str, text: str):
+    full = f"{title}\n{text}"
+    hits = [k for k, rx in TARGET_RULES.items() if rx.search(full)]
+    order = {"공장":0, "데이터센터":1, "물류센터":2, "연구/R&D":3, "사옥/본사":4, "산단":5, "기타건축":6}
+    return sorted(hits, key=lambda x: order.get(x, 99))
+
 # ===================== 필드 추출(요청 정의에 맞춤) =====================
 
 PHONE_RE = re.compile(r"(0\d{1,2})[-.\s]?\d{3,4}[-.\s]?\d{4}")
@@ -245,7 +342,7 @@ def summarize_100(text):
 
 def main_run():
     kst = pytz.timezone(TIMEZONE)
-    START_KST, END_KST = compute_week_window_kst()  # ← 주간 윈도우로 변경
+    START_KST, END_KST = compute_week_window_kst()  # ← 주간 윈도우
 
     # 1) 기사 URL 수집
     items = collect_all_items(QUERIES, PER_QUERY_LIMIT)
@@ -263,7 +360,7 @@ def main_run():
         except Exception:
             pub_dt = pub_kst = None
 
-        # 시간창: 전날 07:00 ~ 오늘 07:00
+        # 시간창: 지난주 월요일 00:00 ~ 이번주 월요일 00:00 (KST, end-exclusive)
         if pub_kst and not (START_KST <= pub_kst < END_KST):
             continue
 
@@ -297,9 +394,17 @@ def main_run():
         if not tags:
             continue
 
+        # ★ 2차 필터: 건축 OR 산업시설 기사만 유지
+        if not should_keep_article(title, text):
+            continue
+
         # 담당자 연락처(기사 전체에서 추출; 없으면 공란)
         full_for_contact = f"{title}\n{desc}\n{text}"
         contact = extract_phone(full_for_contact)
+
+        # ★ 자동 태깅(유형/대상시설)
+        types   = detect_types(title, text)
+        targets = detect_targets(title, text)
 
         rows.append({
             "pubDate_kst": pub_kst,
@@ -309,6 +414,8 @@ def main_run():
             "text": text,
             "matched_tags": tags,     # list
             "contact": contact,       # 담당자 연락처(없으면 공란)
+            "유형": ", ".join(types),
+            "대상시설": ", ".join(targets),
         })
         time.sleep(random.uniform(0.1, 0.3))
 
@@ -346,6 +453,8 @@ def main_run():
             "공사지역": location,
             "담당자 연락처": contact,
             "원본기사 URL 링크": url,
+            "유형": row.get("유형",""),
+            "대상시설": row.get("대상시설",""),
         })
 
     norm = df.apply(build_row, axis=1)
@@ -371,17 +480,19 @@ def main_run():
     stamp = datetime.now().strftime("%Y%m%d")
     out_csv = f"naver_news_{stamp}_07to07.csv"
     csv_cols = [
-        "헤드라인","내용요약","키워드","규모","투자금액","공사지역","담당자 연락처","원본기사 URL 링크","pubDate_kst"
+        "헤드라인","내용요약","키워드","유형","대상시설",
+        "규모","투자금액","공사지역","담당자 연락처","원본기사 URL 링크","pubDate_kst"
     ]
     for c in csv_cols:
         if c not in df_norm.columns:
             df_norm[c] = ""
     df_norm[csv_cols].to_csv(out_csv, index=False, encoding="utf-8-sig")
 
-       # 6) 엑셀 저장 — 열 순서 고정 + 게재시각(KST) tz 제거 + 정렬/서식 적용
-    out_xlsx = f"naver_news_{stamp}_07to07_7days.report.xlsx"  # (원하시면 파일명 유지/변경)
+    # 6) 엑셀 저장 — 열 순서 고정 + 게재시각(KST) tz 제거 + 정렬/서식 적용
+    out_xlsx = f"naver_news_{stamp}_07to07_7days.report.xlsx"
     excel_order = [
-        "게재시각(KST)","헤드라인","내용요약","키워드","규모","투자금액","공사지역","담당자 연락처","원본기사 URL 링크"
+        "게재시각(KST)","헤드라인","내용요약","키워드","유형","대상시설",
+        "규모","투자금액","공사지역","담당자 연락처","원본기사 URL 링크"
     ]
 
     # 게재시각 생성 (tz 제거)
@@ -403,7 +514,6 @@ def main_run():
 
     # ===== openpyxl 서식 적용을 위해 스타일 import
     from openpyxl.styles import Alignment, Font, PatternFill, Border, Side
-    from openpyxl.utils import get_column_letter
 
     # 스타일 프리셋
     header_fill = PatternFill(fill_type="solid", start_color="E2E2E2", end_color="E2E2E2")  # RGB(226,226,226)
@@ -412,17 +522,19 @@ def main_run():
     thin = Side(border_style="thin", color="000000")
     border_all = Border(left=thin, right=thin, top=thin, bottom=thin)
 
-    # 열 폭 지정
+    # 열 폭 지정 (유형/대상시설 추가 반영)
     col_widths = {
         "A": 18.6,  # 게재시각
         "B": 65.0,  # 헤드라인
         "C": 60.0,  # 내용요약
         "D": 20.0,  # 키워드
-        "E": 8.5,   # 규모
-        "F": 8.5,   # 투자금액
-        "G": 22.0,  # 공사지역
-        "H": 13.5,  # 담당자 연락처
-        "I": 61.5,  # 원본기사 URL 링크
+        "E": 18.0,  # 유형
+        "F": 20.0,  # 대상시설
+        "G": 12.0,  # 규모
+        "H": 12.0,  # 투자금액
+        "I": 22.0,  # 공사지역
+        "J": 15.0,  # 담당자 연락처
+        "K": 61.5,  # 원본기사 URL 링크
     }
 
     with pd.ExcelWriter(out_xlsx, engine="openpyxl") as writer:
@@ -430,11 +542,12 @@ def main_run():
         all_df = df_norm_excel[excel_order].copy()
         all_df.to_excel(writer, index=False, sheet_name="전체")
 
-        wb = writer.book
         ws_all = writer.sheets["전체"]
 
         # 열 폭 설정
-        for col_letter, width in col_widths.items():
+        for idx, col_name in enumerate(excel_order, start=1):
+            col_letter = chr(ord('A') + idx - 1)
+            width = col_widths.get(col_letter, 15.0)
             ws_all.column_dimensions[col_letter].width = width
 
         # 헤더 서식
@@ -459,19 +572,19 @@ def main_run():
                 continue
             sub = sub.sort_values(by="게재시각(KST)", ascending=False, kind="mergesort")
             sub = sub[excel_order]
-            sub.to_excel(writer, index=False, sheet_name=tag[:31])
+            name = tag[:31]
+            sub.to_excel(writer, index=False, sheet_name=name)
 
-            ws = writer.sheets[tag[:31]]
-            # 열 폭
-            for col_letter, width in col_widths.items():
+            ws = writer.sheets[name]
+            for idx, col_name in enumerate(excel_order, start=1):
+                col_letter = chr(ord('A') + idx - 1)
+                width = col_widths.get(col_letter, 15.0)
                 ws.column_dimensions[col_letter].width = width
-            # 헤더
             for cell in ws[1]:
                 cell.fill = header_fill
                 cell.font = base_font
                 cell.alignment = align_body
                 cell.border = border_all
-            # 본문
             for row in ws.iter_rows(min_row=2, max_row=ws.max_row, min_col=1, max_col=ws.max_column):
                 for cell in row:
                     cell.font = base_font
