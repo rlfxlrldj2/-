@@ -33,17 +33,15 @@ jobs:
         run: |
           python - <<'PY'
           import os, sys
-          miss=[k for k in ("NAVER_CLIENT_ID","NAVER_CLIENT_SECRET","MAIL_USERNAME","MAIL_PASSWORD") if not os.getenv(k)]
+          miss=[k for k in ("NAVER_CLIENT_ID","NAVER_CLIENT_SECRET") if not os.getenv(k)]
           if miss:
-              print("Missing secrets:", miss)
-              sys.exit(1)
+            print("Missing secrets:", miss)
+            sys.exit(1)
           print("All required secrets exist.")
           PY
         env:
           NAVER_CLIENT_ID: ${{ secrets.NAVER_CLIENT_ID }}
           NAVER_CLIENT_SECRET: ${{ secrets.NAVER_CLIENT_SECRET }}
-          MAIL_USERNAME: ${{ secrets.MAIL_USERNAME }}
-          MAIL_PASSWORD: ${{ secrets.MAIL_PASSWORD }}
 
       - name: Install deps
         run: pip install -r requirements.txt
@@ -78,30 +76,9 @@ jobs:
           git commit -m "weekly: update naver news outputs" || echo "No changes"
           git push origin HEAD:${{ github.ref_name }}
 
-      # ------ 메일 수신자: 파일에서만 읽기 (.github/mail_to.txt) ------
-      - name: Build recipients from .github/mail_to.txt
-        id: tos
-        shell: bash
-        run: |
-          FILE=".github/mail_to.txt"
-          if [ -f "$FILE" ]; then
-            # 주석/공백 제거 후 콤마로 연결
-            list=$(grep -Ev '^\s*#' "$FILE" | sed '/^\s*$/d' | paste -sd, -)
-            echo "list=$list" >> "$GITHUB_OUTPUT"
-            echo "Recipients: $list"
-          else
-            echo "list=" >> "$GITHUB_OUTPUT"
-            echo "::warning:: .github/mail_to.txt not found (no recipients)."
-          fi
-
-      - name: Guard: fail if no recipients
-        if: ${{ steps.tos.outputs.list == '' }}
-        run: |
-          echo "::error:: No recipients found in .github/mail_to.txt"
-          exit 1
-
-      - name: Send email with weekly report (file recipients only)
-        if: ${{ steps.tos.outputs.list != '' }}
+      # ---- (선택) 메일 발송: MAIL_* 시크릿이 모두 있으면 전송, 없으면 자동 스킵 ----
+      - name: Send email with weekly report (optional)
+        if: ${{ secrets.MAIL_USERNAME != '' && secrets.MAIL_PASSWORD != '' && secrets.MAIL_TO != '' }}
         uses: dawidd6/action-send-mail@v6
         with:
           server_address: smtp.gmail.com
@@ -110,7 +87,7 @@ jobs:
           username: ${{ secrets.MAIL_USERNAME }}     # 전체 Gmail 주소
           password: ${{ secrets.MAIL_PASSWORD }}     # Gmail 앱 비밀번호(16자리)
           from: "Naver Robot <${{ secrets.MAIL_USERNAME }}>"
-          to: ${{ steps.tos.outputs.list }}          # 파일에서만 읽음
+          to: ${{ secrets.MAIL_TO }}                 # 쉼표로 여러 명 가능
           subject: "Naver News 주간집계 (일→일)"
           body: |
             안녕하세요,
