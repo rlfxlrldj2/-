@@ -51,18 +51,16 @@ LIFECYCLE_TRIGGERS = [
 
 BASE_KEYWORDS = sorted(list(set(
     INVEST_KEYWORDS + BUILD_KEYWORDS + INDUSTRIAL_ACTIONS + INDUSTRIAL_OBJECTS
-    # + ARCH_OBJECTS + LIFECYCLE_TRIGGERS   # 필요하면 포함
+    # + ARCH_OBJECTS + LIFECYCLE_TRIGGERS
 )))
-QUERIES = BASE_KEYWORDS[:]   # ← 네이버 API 검색 쿼리로 사용
+QUERIES = BASE_KEYWORDS[:]   # 네이버 API 검색 쿼리로 사용
 
-PER_QUERY_LIMIT   = 60    # 쿼리당 최대 기사 수(속도/한도 고려)
-ONLY_NAVER_DOMAIN = True  # 네이버 뉴스 도메인만 수집
-MIN_CHARS         = 200   # 본문 최소 길이
+PER_QUERY_LIMIT   = 60
+ONLY_NAVER_DOMAIN = True
+MIN_CHARS         = 200
 TIMEZONE          = "Asia/Seoul"
 
-
 # ===================== 네이버 검색 Open API =====================
-
 API_URL  = "https://openapi.naver.com/v1/search/news.json"
 NAVER_CLIENT_ID = os.getenv("NAVER_CLIENT_ID")
 NAVER_CLIENT_SECRET = os.getenv("NAVER_CLIENT_SECRET")
@@ -79,18 +77,12 @@ WEB_HEADERS = {k: v for k, v in API_HEADERS.items() if not k.startswith("X-Naver
 
 def compute_week_window_kst():
     """
-    수집 기간:
-      - 시작: 지난주 일요일 00:00 (KST) ≒ 지난주 월요일 00:00 기준 주간
-      - 종료: 이번주 일요일 24:00 = 다음주 월요일 00:00 (KST, end-exclusive)
-    구현상으로는 '지난주 월요일 00:00 ~ 이번주 월요일 00:00'과 동일하므로
-    아래처럼 '월요일 00:00 기준'으로 계산합니다.
+    지난주 월요일 00:00 ~ 이번주 월요일 00:00 (KST, end-exclusive)
     """
     kst = pytz.timezone(TIMEZONE)
     today_kst = datetime.now(kst).date()
-    # 이번 주 월요일 00:00 (KST)
     this_week_mon = today_kst - timedelta(days=today_kst.weekday())
-    end_kst = kst.localize(datetime.combine(this_week_mon, dtime(0, 0, 0)))  # end-exclusive
-    # 지난 주 월요일 00:00 (KST)
+    end_kst = kst.localize(datetime.combine(this_week_mon, dtime(0, 0, 0)))
     start_kst = end_kst - timedelta(days=7)
     return start_kst, end_kst
 
@@ -102,9 +94,6 @@ def _is_naver_host(url: str) -> bool:
         ])
     except Exception:
         return False
-
-# ====== 검색 쿼리: 지정 키워드만 사용 ======
-QUERIES = BASE_KEYWORDS[:]  # 확장어/유사어 없이 그대로 사용
 
 @sleep_and_retry
 @limits(calls=20, period=60)
@@ -137,7 +126,6 @@ def collect_all_items(queries, per_query_limit=200):
     return all_items
 
 # ===================== 본문 추출 =====================
-
 def _clean_text(s: str) -> str:
     if not s: return ""
     return "\n".join(line.strip() for line in s.splitlines() if line.strip())
@@ -147,14 +135,12 @@ def extract_article_text_from_html(html: str) -> str:
     candidates = ["#dic_area", "#newsct_article", "article"]
     for css in candidates:
         node = soup.select_one(css)
-        if not node:
-            continue
+        if not node: continue
         for junk in node.select("script, style, noscript, figure, table, aside, .byline, .copyright"):
             junk.decompose()
         texts = [t.get_text(" ", strip=True) for t in node.find_all(["p","div","span"]) if t.get_text(strip=True)]
         text = _clean_text("\n".join(texts))
-        if len(text) > 100:
-            return text
+        if len(text) > 100: return text
     return _clean_text(soup.get_text(" ", strip=True))
 
 @sleep_and_retry
@@ -163,7 +149,7 @@ def extract_article_text_from_html(html: str) -> str:
 def fetch_html(url: str):
     r = requests.get(url, headers=WEB_HEADERS, timeout=20, allow_redirects=True)
     r.raise_for_status()
-    return r.text, r.url  # 최종 URL
+    return r.text, r.url
 
 def extract_fulltext(url: str):
     html, final_url = fetch_html(url)
@@ -173,27 +159,20 @@ def extract_fulltext(url: str):
     return extract_article_text_from_html(html), final_url
 
 # ===================== 키워드 매칭 =====================
-
 def _make_kw_regex(w: str) -> str:
-    """공백/중간점(·, ㆍ)만 유연 허용"""
     parts = []
     for ch in w:
-        if ch.isspace():
-            parts.append(r"\s*")
-        elif ch in ("·", "ㆍ"):
-            parts.append(r"[·ㆍ]?")
-        else:
-            parts.append(re.escape(ch))
+        if ch.isspace(): parts.append(r"\s*")
+        elif ch in ("·", "ㆍ"): parts.append(r"[·ㆍ]?")
+        else: parts.append(re.escape(ch))
     return "".join(parts)
 
-TAG_PATTERNS = {}
-for tag in BASE_KEYWORDS:
-    TAG_PATTERNS[tag] = [re.compile(_make_kw_regex(tag))]
+TAG_PATTERNS = {tag: [re.compile(_make_kw_regex(tag))] for tag in BASE_KEYWORDS}
 
 def find_tags_for_article(title: str, snippet: str, text: str):
     full = f"{title}\n{snippet}\n{text}"
     hit = []
-    for tag in BASE_KEYWORDS:  # 지정 순서 = 우선순위
+    for tag in BASE_KEYWORDS:
         pats = TAG_PATTERNS[tag]
         if any(p.search(title) for p in pats) or any(p.search(full) for p in pats):
             hit.append(tag)
@@ -214,8 +193,7 @@ ARCH_OBJECT_RE = re.compile(r"(건축|건축물|건물|빌딩|주택|아파트|�
 
 def is_arch_article(title: str, text: str) -> bool:
     full = f"{title}\n{text}"
-    if NEGATIVE_SOFT.search(full):
-        return False
+    if NEGATIVE_SOFT.search(full): return False
     return bool(ARCH_ACTION_RE.search(full) and ARCH_OBJECT_RE.search(full))
 
 INDUSTRIAL_ACTION_RE = re.compile(
@@ -227,8 +205,7 @@ INDUSTRIAL_OBJECT_RE = re.compile(
 
 def is_industrial_facility(title: str, text: str) -> bool:
     full = f"{title}\n{text}"
-    if NEGATIVE_SOFT.search(full):
-        return False
+    if NEGATIVE_SOFT.search(full): return False
     return bool(INDUSTRIAL_ACTION_RE.search(full) and INDUSTRIAL_OBJECT_RE.search(full))
 
 def should_keep_article(title: str, text: str) -> bool:
@@ -264,7 +241,6 @@ def detect_targets(title: str, text: str):
     return sorted(hits, key=lambda x: order.get(x, 99))
 
 # ===================== 필드 추출 =====================
-
 PHONE_RE = re.compile(r"(0\d{1,2})[-.\s]?\d{3,4}[-.\s]?\d{4}")
 
 AMOUNT_PATTERNS = [
@@ -293,10 +269,8 @@ def extract_first(patterns, text):
         if m:
             g = m.groups() if hasattr(m, "groups") else None
             try:
-                if g and len(g) > 1:
-                    return " ".join([x for x in g if x])
-                if g and len(g) == 1:
-                    return g[0]
+                if g and len(g) > 1: return " ".join([x for x in g if x])
+                if g and len(g) == 1: return g[0]
                 return m.group(1) if m.lastindex else m.group(0)
             except Exception:
                 return m.group(0)
@@ -305,35 +279,28 @@ def extract_first(patterns, text):
 def extract_investment(text):
     for p in AMOUNT_PATTERNS:
         m = p.search(text)
-        if not m:
-            continue
+        if not m: continue
         if len(m.groups()) >= 2 and m.group(2):
             return f"{m.group(1)}조 {m.group(2)}억 원"
         return m.group(1).strip() if m.groups() else m.group(0).strip()
     return ""
 
-def extract_scale(text):
-    return extract_first(SCALE_PATTERNS, text)
-
+def extract_scale(text): return extract_first(SCALE_PATTERNS, text)
 def extract_phone(text):
     m = PHONE_RE.search(text)
     return m.group(0) if m else ""
-
 def extract_location(text):
     m = LOC_RE.search(text)
     return m.group(0) if m else ""
-
 def summarize_100(text):
-    if not text:
-        return ""
+    if not text: return ""
     s = re.sub(r"\s+", " ", text).strip()
     return s[:100]
 
 # ===================== 메인 파이프라인 =====================
-
 def main_run():
     kst = pytz.timezone(TIMEZONE)
-    START_KST, END_KST = compute_week_window_kst()  # 주간 윈도우
+    START_KST, END_KST = compute_week_window_kst()
 
     items = collect_all_items(QUERIES, PER_QUERY_LIMIT)
     rows = []
@@ -348,7 +315,6 @@ def main_run():
         except Exception:
             pub_dt = pub_kst = None
 
-        # 지난주 월요일 00:00 ~ 이번주 월요일 00:00 (KST, end-exclusive)
         if pub_kst and not (START_KST <= pub_kst < END_KST):
             continue
 
@@ -381,12 +347,10 @@ def main_run():
         if not tags:
             continue
 
-        # 2차 필터
         if not should_keep_article(title, text):
             continue
 
         contact = extract_phone(f"{title}\n{desc}\n{text}")
-
         types   = detect_types(title, text)
         targets = detect_targets(title, text)
 
@@ -441,8 +405,7 @@ def main_run():
     norm = df.apply(build_row, axis=1)
 
     def tags_to_str(tags_list):
-        if not isinstance(tags_list, list):
-            return ""
+        if not isinstance(tags_list, list): return ""
         ordered = [t for t in BASE_KEYWORDS if t in tags_list]
         return ", ".join(ordered)
 
@@ -489,17 +452,8 @@ def main_run():
     border_all = Border(left=thin, right=thin, top=thin, bottom=thin)
 
     col_widths = {
-        "A": 18.6,  # 게재시각
-        "B": 65.0,  # 헤드라인
-        "C": 60.0,  # 내용요약
-        "D": 20.0,  # 키워드
-        "E": 18.0,  # 유형
-        "F": 20.0,  # 대상시설
-        "G": 12.0,  # 규모
-        "H": 12.0,  # 투자금액
-        "I": 22.0,  # 공사지역
-        "J": 15.0,  # 담당자 연락처
-        "K": 61.5,  # 원본기사 URL 링크
+        "A": 18.6, "B": 65.0, "C": 60.0, "D": 20.0, "E": 18.0,
+        "F": 20.0, "G": 12.0, "H": 12.0, "I": 22.0, "J": 15.0, "K": 61.5,
     }
 
     with pd.ExcelWriter(out_xlsx, engine="openpyxl") as writer:
