@@ -1,10 +1,121 @@
 name: Naver News Daily 08:00 KST
+
 on:
-  workflow_dispatch:
   schedule:
-    - cron: "0 23 * * 0"   # 일 23:00 UTC = 월 08:00 KST
+    - cron: "0 23 * * 0"   # 매주 일요일 23:00 UTC == 월요일 08:00 KST
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
 jobs:
-  hello:
+  crawl:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      TZ: Asia/Seoul
+
     steps:
-      - run: echo "✅ Workflow visible smoke test"
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.ref }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Verify required secrets exist
+        run: |
+          python - <<'PY'
+          import os, sys
+          miss=[k for k in ("NAVER_CLIENT_ID","NAVER_CLIENT_SECRET","MAIL_USERNAME","MAIL_PASSWORD") if not os.getenv(k)]
+          if miss:
+              print("Missing secrets:", miss)
+              sys.exit(1)
+          print("All required secrets exist.")
+          PY
+        env:
+          NAVER_CLIENT_ID: ${{ secrets.NAVER_CLIENT_ID }}
+          NAVER_CLIENT_SECRET: ${{ secrets.NAVER_CLIENT_SECRET }}
+          MAIL_USERNAME: ${{ secrets.MAIL_USERNAME }}
+          MAIL_PASSWORD: ${{ secrets.MAIL_PASSWORD }}
+
+      - name: Install deps
+        run: pip install -r requirements.txt
+
+      - name: Run crawler
+        env:
+          NAVER_CLIENT_ID: ${{ secrets.NAVER_CLIENT_ID }}
+          NAVER_CLIENT_SECRET: ${{ secrets.NAVER_CLIENT_SECRET }}
+        run: python crawl.py
+
+      # ▶ 산출물이 실제로 생성됐는지 즉시 확인(디버그용)
+      - name: List outputs in workspace
+        run: |
+          pwd
+          ls -al
+          echo "---- CSV ----";  ls -al naver_news_*_07to07.csv || true
+          echo "---- XLSX ----"; ls -al naver_news_*_07to07*.report.xlsx || true
+
+      - name: Upload artifacts (CSV/XLSX)
+        uses: actions/upload-artifact@v4
+        with:
+          name: naver_news_outputs
+          path: |
+            naver_news_*_07to07.csv
+            naver_news_*_07to07*.report.xlsx
+          if-no-files-found: warn
+
+      - name: Commit outputs
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add *.csv *.xlsx || true
+          git commit -m "weekly: update naver news outputs" || echo "No changes"
+          git push origin HEAD:${{ github.ref_name }}
+
+      # ------ 메일 수신자: 파일에서만 읽기 (.github/mail_to.txt) ------
+      - name: Build recipients from .github/mail_to.txt
+        id: tos
+        shell: bash
+        run: |
+          FILE=".github/mail_to.txt"
+          if [ -f "$FILE" ]; then
+            # 주석/공백 제거 후 콤마로 연결
+            list=$(grep -Ev '^\s*#' "$FILE" | sed '/^\s*$/d' | paste -sd, -)
+            echo "list=$list" >> "$GITHUB_OUTPUT"
+            echo "Recipients: $list"
+          else
+            echo "list=" >> "$GITHUB_OUTPUT"
+            echo "::warning:: .github/mail_to.txt not found (no recipients)."
+          fi
+
+      - name: Guard: fail if no recipients
+        if: ${{ steps.tos.outputs.list == '' }}
+        run: |
+          echo "::error:: No recipients found in .github/mail_to.txt"
+          exit 1
+
+      - name: Send email with weekly report (file recipients only)
+        uses: dawidd6/action-send-mail@v6
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          secure: true
+          username: ${{ secrets.MAIL_USERNAME }}     # 전체 Gmail 주소
+          password: ${{ secrets.MAIL_PASSWORD }}     # Gmail 앱 비밀번호(16자리)
+          from: "Naver Robot <${{ secrets.MAIL_USERNAME }}>"
+          to: ${{ steps.tos.outputs.list }}          # ← 파일에서만 읽음 (secrets.MAIL_TO 미사용)
+          subject: "Naver News 주간집계 (일→일)"
+          body: |
+            안녕하세요,
+            첨부 파일은 지난주 월요일 00:00부터 이번주 월요일 00:00(KST)까지의 주간 집계입니다.
+            - 헤드라인 / 내용요약(100자) / 키워드 / 유형 / 대상시설 / 규모 / 투자금액 / 공사지역 / 담당자 연락처 / 원본기사 링크 포함
+            감사합니다.
+          attachments: |
+            naver_news_*_07to07*.report.xlsx
