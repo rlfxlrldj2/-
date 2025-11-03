@@ -175,9 +175,7 @@ def extract_fulltext(url: str):
 # ===================== 키워드 매칭 =====================
 
 def _make_kw_regex(w: str) -> str:
-    """공백/중간점(·, ㆍ)만 유연 허용
-    *완전 일치만 원하면 return re.escape(w) 로 바꾸세요.
-    """
+    """공백/중간점(·, ㆍ)만 유연 허용"""
     parts = []
     for ch in w:
         if ch.isspace():
@@ -188,13 +186,11 @@ def _make_kw_regex(w: str) -> str:
             parts.append(re.escape(ch))
     return "".join(parts)
 
-# 지정 키워드만 패턴으로 사용 (확장어 사용 안 함)
 TAG_PATTERNS = {}
 for tag in BASE_KEYWORDS:
     TAG_PATTERNS[tag] = [re.compile(_make_kw_regex(tag))]
 
 def find_tags_for_article(title: str, snippet: str, text: str):
-    """한 기사에서 매칭되는 모든 태그(키워드) 반환"""
     full = f"{title}\n{snippet}\n{text}"
     hit = []
     for tag in BASE_KEYWORDS:  # 지정 순서 = 우선순위
@@ -204,7 +200,6 @@ def find_tags_for_article(title: str, snippet: str, text: str):
     return hit
 
 # ====== 2차 필터 & 자동 태깅 ======
-# 금융/부동산상품/소프트웨어 위주 기사 제거(공장/라인/반도체/배터리 등은 '포함' 신호이므로 제외 목록에 넣지 않음)
 EXCLUDE_KEYWORDS = [
     "증권", "주가", "지분", "배당", "리츠", "펀드", "ETF",
     "자산운용", "브로커리지", "리서치센터",
@@ -214,7 +209,6 @@ EXCLUDE_KEYWORDS = [
 ]
 NEGATIVE_SOFT = re.compile("|".join(map(re.escape, EXCLUDE_KEYWORDS)))
 
-# 건축 기사 판별 (행위 AND 대상)
 ARCH_ACTION_RE = re.compile(r"(신축|증축|증개축|리모델링|개보수|대수선|착공|준공|설계공모|설계\s*공모|입찰\s*공고|시공사\s*선정|발주)")
 ARCH_OBJECT_RE = re.compile(r"(건축|건축물|건물|빌딩|주택|아파트|오피스텔|학교|병원|도서관|체육관|공공청사|청사|법원|터미널|역사|공항|물류센터|데이터센터|박물관|미술관|연수원|기숙사|연구동|공장)")
 
@@ -224,7 +218,6 @@ def is_arch_article(title: str, text: str) -> bool:
         return False
     return bool(ARCH_ACTION_RE.search(full) and ARCH_OBJECT_RE.search(full))
 
-# 산업시설(공장/설비/라인) 증설/신축 판별 (행위 AND 대상)
 INDUSTRIAL_ACTION_RE = re.compile(
     r"(설비\s*(증설|확충|교체|도입)|라인\s*(증설|확충)|생산라인\s*증설|생산능력\s*확대|CAPA\s*확대|캐파\s*확대|공장\s*(신축|증축|증설|건립))"
 )
@@ -239,10 +232,8 @@ def is_industrial_facility(title: str, text: str) -> bool:
     return bool(INDUSTRIAL_ACTION_RE.search(full) and INDUSTRIAL_OBJECT_RE.search(full))
 
 def should_keep_article(title: str, text: str) -> bool:
-    # 건축 기사 또는 산업시설(공장/설비/라인) 증설/신축 기사면 통과
     return is_arch_article(title, text) or is_industrial_facility(title, text)
 
-# 엑셀 자동 태깅
 TYPE_RULES = {
   "신규 투자":   re.compile(r"(투자\s*(협약|유치)|MOU|시설투자|설비투자|신규\s*투자|대규모\s*투자)"),
   "공장 신축":   re.compile(r"(공장\s*(신축|건립|건설)|신공장)"),
@@ -272,7 +263,7 @@ def detect_targets(title: str, text: str):
     order = {"공장":0, "데이터센터":1, "물류센터":2, "연구/R&D":3, "사옥/본사":4, "산단":5, "기타건축":6}
     return sorted(hits, key=lambda x: order.get(x, 99))
 
-# ===================== 필드 추출(요청 정의에 맞춤) =====================
+# ===================== 필드 추출 =====================
 
 PHONE_RE = re.compile(r"(0\d{1,2})[-.\s]?\d{3,4}[-.\s]?\d{4}")
 
@@ -342,14 +333,11 @@ def summarize_100(text):
 
 def main_run():
     kst = pytz.timezone(TIMEZONE)
-    START_KST, END_KST = compute_week_window_kst()  # ← 주간 윈도우
+    START_KST, END_KST = compute_week_window_kst()  # 주간 윈도우
 
-    # 1) 기사 URL 수집
     items = collect_all_items(QUERIES, PER_QUERY_LIMIT)
-
     rows = []
 
-    # 2) 본문 추출 + 시간 필터 + 태깅
     for it in tqdm(items, desc="본문 추출/정리"):
         title = BeautifulSoup(it.get("title", ""), "lxml").get_text(" ", strip=True)
         desc  = BeautifulSoup(it.get("description", ""), "lxml").get_text(" ", strip=True)
@@ -360,7 +348,7 @@ def main_run():
         except Exception:
             pub_dt = pub_kst = None
 
-        # 시간창: 지난주 월요일 00:00 ~ 이번주 월요일 00:00 (KST, end-exclusive)
+        # 지난주 월요일 00:00 ~ 이번주 월요일 00:00 (KST, end-exclusive)
         if pub_kst and not (START_KST <= pub_kst < END_KST):
             continue
 
@@ -389,20 +377,16 @@ def main_run():
         if len(text) < MIN_CHARS:
             continue
 
-        # 키워드 태그 부여(여러 개 가능)
         tags = find_tags_for_article(title, desc, text)
         if not tags:
             continue
 
-        # ★ 2차 필터: 건축 OR 산업시설 기사만 유지
+        # 2차 필터
         if not should_keep_article(title, text):
             continue
 
-        # 담당자 연락처(기사 전체에서 추출; 없으면 공란)
-        full_for_contact = f"{title}\n{desc}\n{text}"
-        contact = extract_phone(full_for_contact)
+        contact = extract_phone(f"{title}\n{desc}\n{text}")
 
-        # ★ 자동 태깅(유형/대상시설)
         types   = detect_types(title, text)
         targets = detect_targets(title, text)
 
@@ -412,8 +396,8 @@ def main_run():
             "snippet": desc,
             "used_url": final_url,
             "text": text,
-            "matched_tags": tags,     # list
-            "contact": contact,       # 담당자 연락처(없으면 공란)
+            "matched_tags": tags,
+            "contact": contact,
             "유형": ", ".join(types),
             "대상시설": ", ".join(targets),
         })
@@ -431,20 +415,17 @@ def main_run():
 
     df = pd.DataFrame(rows)
 
-    # 3) 요청 포맷으로 정규화 컬럼 만들기
     def build_row(row):
         title = str(row.get("title","")).strip()
         text  = str(row.get("text","")).strip()
         snippet = str(row.get("snippet","")).strip()
         full = f"{title}\n{snippet}\n{text}"
-
-        summary_100 = summarize_100(text or snippet)   # 내용요약(100자)
-        scale = extract_scale(full)                    # 규모(연면적/건축면적 등)
-        invest = extract_investment(full)              # 투자금액/예상금액
-        location = extract_location(full)              # 공사지역(도/시/군/구…)
+        summary_100 = summarize_100(text or snippet)
+        scale = extract_scale(full)
+        invest = extract_investment(full)
+        location = extract_location(full)
         url = row.get("used_url") or ""
         contact = row.get("contact","")
-
         return pd.Series({
             "헤드라인": title,
             "내용요약": summary_100,
@@ -459,24 +440,18 @@ def main_run():
 
     norm = df.apply(build_row, axis=1)
 
-    # 키워드 열: 매칭된 지정 키워드들을 ', '로 연결 (지정 순서 유지)
     def tags_to_str(tags_list):
         if not isinstance(tags_list, list):
             return ""
         ordered = [t for t in BASE_KEYWORDS if t in tags_list]
         return ", ".join(ordered)
 
-    df_norm = pd.concat([
-        df[["pubDate_kst","matched_tags"]],
-        norm
-    ], axis=1)
+    df_norm = pd.concat([df[["pubDate_kst","matched_tags"]], norm], axis=1)
     df_norm["키워드"] = df_norm["matched_tags"].apply(tags_to_str)
     df_norm.drop(columns=["matched_tags"], inplace=True)
 
-    # 4) 전역 중복 제거: 같은 URL은 첫 1건만 유지
     df_norm = df_norm.drop_duplicates(subset=["원본기사 URL 링크"]).copy()
 
-    # 5) CSV 저장(요청 열만; pubDate_kst는 엑셀용 게재시각 생성에 사용)
     stamp = datetime.now().strftime("%Y%m%d")
     out_csv = f"naver_news_{stamp}_07to07.csv"
     csv_cols = [
@@ -484,18 +459,15 @@ def main_run():
         "규모","투자금액","공사지역","담당자 연락처","원본기사 URL 링크","pubDate_kst"
     ]
     for c in csv_cols:
-        if c not in df_norm.columns:
-            df_norm[c] = ""
+        if c not in df_norm.columns: df_norm[c] = ""
     df_norm[csv_cols].to_csv(out_csv, index=False, encoding="utf-8-sig")
 
-    # 6) 엑셀 저장 — 열 순서 고정 + 게재시각(KST) tz 제거 + 정렬/서식 적용
     out_xlsx = f"naver_news_{stamp}_07to07_7days.report.xlsx"
     excel_order = [
         "게재시각(KST)","헤드라인","내용요약","키워드","유형","대상시설",
         "규모","투자금액","공사지역","담당자 연락처","원본기사 URL 링크"
     ]
 
-    # 게재시각 생성 (tz 제거)
     df_norm_excel = df_norm.copy()
     if "pubDate_kst" in df_norm_excel.columns:
         dt = pd.to_datetime(df_norm_excel["pubDate_kst"], errors="coerce", utc=True)
@@ -504,25 +476,18 @@ def main_run():
     else:
         df_norm_excel["게재시각(KST)"] = ""
 
-    # 누락 열 보정
     for c in excel_order:
-        if c not in df_norm_excel.columns:
-            df_norm_excel[c] = ""
-
-    # ▶ 정렬: 게재시각 내림차순
+        if c not in df_norm_excel.columns: df_norm_excel[c] = ""
     df_norm_excel = df_norm_excel.sort_values(by="게재시각(KST)", ascending=False, kind="mergesort")
 
-    # ===== openpyxl 서식 적용을 위해 스타일 import
     from openpyxl.styles import Alignment, Font, PatternFill, Border, Side
 
-    # 스타일 프리셋
-    header_fill = PatternFill(fill_type="solid", start_color="E2E2E2", end_color="E2E2E2")  # RGB(226,226,226)
-    base_font   = Font(name="Malgun Gothic", size=10)  # '맑은 고딕'
+    header_fill = PatternFill(fill_type="solid", start_color="E2E2E2", end_color="E2E2E2")
+    base_font   = Font(name="Malgun Gothic", size=10)
     align_body  = Alignment(horizontal="left", vertical="center", wrap_text=True)
     thin = Side(border_style="thin", color="000000")
     border_all = Border(left=thin, right=thin, top=thin, bottom=thin)
 
-    # 열 폭 지정 (유형/대상시설 추가 반영)
     col_widths = {
         "A": 18.6,  # 게재시각
         "B": 65.0,  # 헤드라인
@@ -538,48 +503,39 @@ def main_run():
     }
 
     with pd.ExcelWriter(out_xlsx, engine="openpyxl") as writer:
-        # 전체 시트
         all_df = df_norm_excel[excel_order].copy()
         all_df.to_excel(writer, index=False, sheet_name="전체")
-
         ws_all = writer.sheets["전체"]
 
-        # 열 폭 설정
-        for idx, col_name in enumerate(excel_order, start=1):
+        for idx, _ in enumerate(excel_order, start=1):
             col_letter = chr(ord('A') + idx - 1)
-            width = col_widths.get(col_letter, 15.0)
-            ws_all.column_dimensions[col_letter].width = width
+            ws_all.column_dimensions[col_letter].width = col_widths.get(col_letter, 15.0)
 
-        # 헤더 서식
         for cell in ws_all[1]:
             cell.fill = header_fill
             cell.font = base_font
             cell.alignment = align_body
             cell.border = border_all
 
-        # 본문 서식
         for row in ws_all.iter_rows(min_row=2, max_row=ws_all.max_row, min_col=1, max_col=ws_all.max_column):
             for cell in row:
                 cell.font = base_font
                 cell.alignment = align_body
                 cell.border = border_all
 
-        # 키워드별 시트 (있으면 동일 포맷 적용)
         for tag in BASE_KEYWORDS:
             sub = df_norm_excel[df_norm_excel["키워드"].str.contains(
                 rf"(?:^|, ){re.escape(tag)}(?:, |$)", na=False)]
-            if sub.empty:
-                continue
+            if sub.empty: continue
             sub = sub.sort_values(by="게재시각(KST)", ascending=False, kind="mergesort")
             sub = sub[excel_order]
             name = tag[:31]
             sub.to_excel(writer, index=False, sheet_name=name)
 
             ws = writer.sheets[name]
-            for idx, col_name in enumerate(excel_order, start=1):
+            for idx, _ in enumerate(excel_order, start=1):
                 col_letter = chr(ord('A') + idx - 1)
-                width = col_widths.get(col_letter, 15.0)
-                ws.column_dimensions[col_letter].width = width
+                ws.column_dimensions[col_letter].width = col_widths.get(col_letter, 15.0)
             for cell in ws[1]:
                 cell.fill = header_fill
                 cell.font = base_font
@@ -601,7 +557,6 @@ if __name__ == "__main__":
         print("[ERROR] Crawler failed:", repr(e))
         import traceback, pandas as pd
         traceback.print_exc()
-        # 실패해도 비어있는 산출물을 만들어 두고(Artifacts/커밋용), 워크플로는 성공 처리
         from datetime import datetime
         stamp = datetime.now().strftime("%Y%m%d")
         empty_csv = f"naver_news_{stamp}_07to07.csv"
