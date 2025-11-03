@@ -46,11 +46,16 @@ jobs:
       - name: Install deps
         run: pip install -r requirements.txt
 
-      - name: Run crawler
+      # ===== 여기부터 추가된 verbose 실행 스텝 =====
+      - name: Run crawler (verbose)
         env:
           NAVER_CLIENT_ID: ${{ secrets.NAVER_CLIENT_ID }}
           NAVER_CLIENT_SECRET: ${{ secrets.NAVER_CLIENT_SECRET }}
-        run: python crawl.py
+          PYTHONUNBUFFERED: "1"
+        run: |
+          set -x
+          python -u crawl.py || { echo "::error:: crawl.py failed"; exit 1; }
+      # ===========================================
 
       - name: List outputs in workspace
         run: |
