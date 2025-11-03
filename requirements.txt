@@ -1,11 +1,11 @@
 requests
+pandas
 beautifulsoup4
-lxml
+python-dateutil
 trafilatura
 tenacity
 ratelimit
-pandas
-python-dateutil
-pytz
 tqdm
+lxml
 openpyxl
+pytz
