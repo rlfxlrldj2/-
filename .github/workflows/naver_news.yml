@@ -3,7 +3,7 @@ name: Naver News Daily 08:00 KST
 on:
   schedule:
     - cron: "0 23 * * 0"   # 매주 일요일 23:00 UTC == 월요일 08:00 KST
-  workflow_dispatch:
+  workflow_dispatch: {}
 
 permissions:
   contents: write
@@ -54,7 +54,6 @@ jobs:
           NAVER_CLIENT_SECRET: ${{ secrets.NAVER_CLIENT_SECRET }}
         run: python crawl.py
 
-      # ▶ 산출물이 실제로 생성됐는지 즉시 확인(디버그용)
       - name: List outputs in workspace
         run: |
           pwd
@@ -102,6 +101,7 @@ jobs:
           exit 1
 
       - name: Send email with weekly report (file recipients only)
+        if: ${{ steps.tos.outputs.list != '' }}
         uses: dawidd6/action-send-mail@v6
         with:
           server_address: smtp.gmail.com
@@ -110,7 +110,7 @@ jobs:
           username: ${{ secrets.MAIL_USERNAME }}     # 전체 Gmail 주소
           password: ${{ secrets.MAIL_PASSWORD }}     # Gmail 앱 비밀번호(16자리)
           from: "Naver Robot <${{ secrets.MAIL_USERNAME }}>"
-          to: ${{ steps.tos.outputs.list }}          # ← 파일에서만 읽음 (secrets.MAIL_TO 미사용)
+          to: ${{ steps.tos.outputs.list }}          # 파일에서만 읽음
           subject: "Naver News 주간집계 (일→일)"
           body: |
             안녕하세요,
