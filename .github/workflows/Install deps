@@ -1,0 +1,13 @@
+      - name: Smoke test (python & imports)
+        run: |
+          python --version
+          pip list | sed -n '1,60p'
+          python - <<'PY'
+          import sys, platform
+          print("PY:", sys.version.replace("\n"," "))
+          print("PLAT:", platform.platform())
+          # 필수 모듈 임포트 체크
+          for m in ["requests","pandas","bs4","dateutil","trafilatura","tenacity","ratelimit","tqdm","lxml","openpyxl","pytz"]:
+              __import__(m)
+          print("OK: all imports")
+          PY
